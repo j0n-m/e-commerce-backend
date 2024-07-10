@@ -1,6 +1,6 @@
 import mongoose, { Types } from "mongoose";
 
-interface ICategory {
+export interface ICategory {
   name: string;
   alias?: string;
 }

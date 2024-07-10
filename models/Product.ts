@@ -7,24 +7,24 @@ type HighlightType = {
 };
 
 interface IProduct {
-  _id: Types.ObjectId;
+  // _id?: Types.ObjectId;
   name: string;
   brand: string;
   price: number;
   retail_price: number;
   description: string;
   highlights: Array<HighlightType>;
-  quantity: number;
+  quantity?: number;
   category: Array<Types.ObjectId>;
-  total_bought: number;
+  total_bought?: number;
   tags: Array<string>;
   image_src?: string;
 }
 
 const productSchema = new Schema<IProduct>({
-  _id: {
-    type: Schema.ObjectId,
-  },
+  // _id: {
+  //   type: Schema.ObjectId,
+  // },
   name: {
     type: String,
     required: true,
@@ -90,3 +90,4 @@ productSchema.virtual("url").get(function () {
 });
 
 export default mongoose.model("Product", productSchema);
+export { IProduct };
