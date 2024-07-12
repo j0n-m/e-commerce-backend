@@ -2,7 +2,7 @@
   "name": "e-commerce-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
     "build": "rimraf ./dist && npx tsc",
     "dev": "concurrently \"tsc -w\" \"nodemon ./dist/app.js\"",

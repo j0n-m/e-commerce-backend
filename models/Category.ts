@@ -14,6 +14,7 @@ const categorySchema = new Schema<ICategory>({
   },
   alias: {
     type: String,
+    default: "",
   },
 });
 

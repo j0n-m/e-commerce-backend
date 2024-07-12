@@ -7,5 +7,8 @@ function upperCaseFirstLetters(str: string | string[]): string {
     .map((word) => word[0].toUpperCase() + word.slice(1))
     .join(" ");
 }
+function upperCaseFirstLetter(str: string) {
+  return str[0].toUpperCase() + str.slice(1);
+}
 
-export { upperCaseFirstLetters };
+export { upperCaseFirstLetters, upperCaseFirstLetter };

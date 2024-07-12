@@ -38,23 +38,28 @@ const productSchema = new Schema<IProduct>({
   price: {
     type: Number,
     required: true,
+    min: 0.01,
+    max: 100000,
   },
   retail_price: {
     type: Number,
     required: true,
+    min: 0.01,
+    max: 100000,
   },
   description: {
     type: String,
+    default: "",
   },
   highlights: [
     {
       heading: {
         type: String,
-        minlength: 2,
+        minlength: 1,
       },
       overview: {
         type: String,
-        minlength: 2,
+        minlength: 1,
       },
     },
   ],
@@ -62,6 +67,7 @@ const productSchema = new Schema<IProduct>({
     type: Number,
     default: 20,
     required: true,
+    max: 250,
   },
   category: [
     {
@@ -90,4 +96,4 @@ productSchema.virtual("url").get(function () {
 });
 
 export default mongoose.model("Product", productSchema);
-export { IProduct };
+export { IProduct, HighlightType };

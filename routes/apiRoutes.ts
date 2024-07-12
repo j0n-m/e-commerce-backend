@@ -11,15 +11,15 @@ router.post("/products", controller.products_post);
 
 //single product
 router.get("/product/:productId", controller.product_detail_get);
-router.put("/product/:productId");
-router.delete("/product/:productId");
+router.put("/product/:productId", controller.product_detail_put);
+router.delete("/product/:productId", controller.product_detail_delete);
 
 //all categories
 router.get("/categories", controller.categories_get);
 router.post("/categories", controller.categories_post);
 //single category
 router.get("/category/:categoryId", controller.category_detail_get);
-router.put("/category/:categoryId");
+router.put("/category/:categoryId", controller.category_detail_put);
 router.delete("/category/:categoryId");
 
 //all reviews of a product
