@@ -20,15 +20,15 @@ router.post("/categories", controller.categories_post);
 //single category
 router.get("/category/:categoryId", controller.category_detail_get);
 router.put("/category/:categoryId", controller.category_detail_put);
-router.delete("/category/:categoryId");
+router.delete("/category/:categoryId", controller.category_detail_delete);
 
 //all reviews of a product
-router.get("/product/:productId/reviews").post("/product/:productId/reviews");
+router.get("/reviews", controller.reviews_get);
+router.post("/reviews", controller.reviews_post);
 //get a single review of a product
-router
-  .get("/product/:productId/review/:reviewId")
-  .put("/product/:productId/review/:reviewId")
-  .delete("/product/:productId/review/:reviewId");
+router.get("/review/:reviewId", controller.review_detail_get);
+router.put("/review/:reviewId", controller.review_detail_put);
+router.delete("/review/:reviewId", controller.review_detail_delete);
 
 router.use((req, res, next) => {
   return res.sendStatus(404);

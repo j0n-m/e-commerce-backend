@@ -3,7 +3,6 @@ import mongoose, { Types } from "mongoose";
 const Schema = mongoose.Schema;
 
 interface IReview {
-  _id: Types.ObjectId;
   rating: 1 | 2 | 3 | 4 | 5;
   reviewer_name: string;
   review_description: string;
@@ -14,9 +13,6 @@ interface IReview {
 
 //Single review instance
 const reviewSchema = new Schema<IReview>({
-  _id: {
-    type: Schema.ObjectId,
-  },
   rating: {
     type: Number,
     enum: [1, 2, 3, 4, 5],
@@ -29,7 +25,7 @@ const reviewSchema = new Schema<IReview>({
   review_description: {
     type: String,
     required: true,
-    minlength: 2,
+    minlength: 1,
   },
   review_date: {
     type: Schema.Types.Date,
@@ -50,3 +46,4 @@ reviewSchema.virtual("url").get(function () {
 });
 
 export default mongoose.model("Review", reviewSchema);
+export { IReview };

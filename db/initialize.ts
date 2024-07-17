@@ -2,6 +2,7 @@ import mongoose, { Types } from "mongoose";
 import Category from "../models/Category";
 import Product from "../models/Product";
 import { IProduct } from "../models/Product";
+import Review from "../models/Review";
 
 async function safeHandler(cb: Function) {
   try {
@@ -118,11 +119,26 @@ async function initializeProducts() {
     }
   );
 }
+async function initializeReviews() {
+  const review = new Review({
+    _id: new mongoose.Types.ObjectId(),
+    rating: 4,
+    reviewer_name: "stan",
+    review_description: "my desc.",
+    review_date: Date.now(),
+    product_id: "668d73fa09a78beee0ca7529",
+  });
+
+  review.save();
+  console.log("saved review");
+}
 async function initController() {
-  console.log("initController() started");
-  await safeHandler(initializeCategories);
-  console.log("about to start initializeProducts");
-  await safeHandler(initializeProducts);
+  // console.log("initController() started");
+  // await safeHandler(initializeCategories);
+  // console.log("about to start initializeProducts");
+  // await safeHandler(initializeProducts);
+  console.log("about to start initializeReviews");
+  await safeHandler(initializeReviews);
 }
 
 export { initController };
