@@ -2,8 +2,9 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import Category, { ICategory } from "../models/Category";
 import Product, { IProduct, HighlightType } from "../models/Product";
-import { validationResult, body } from "express-validator";
+import { validationResult, body, query, param } from "express-validator";
 import Review, { IReview } from "../models/Review";
+import { QueryApi } from "../utils/QueryApi";
 
 //error handler to prevent redundancy with try-catch blocks in all endpoints
 function asyncHandler(func: Function) {
@@ -27,36 +28,196 @@ function asyncHandler(func: Function) {
 //////////////////////
 
 const test_get = (req: Request, res: Response, next: NextFunction) => {
-  return res.json({ data: "test endpoint", status: 200, message: "OK" });
+  return res.json({ data: "test endpoint", message: "OK" });
 };
 
-const products_get = asyncHandler(
-  async (req: Request, res: Response, next: NextFunction) => {
-    //assumming db is already connected
-    const limit_f = Number(req.query.limit);
-    const skip_f = Number(req.query.skip);
-    // const REGEX_SEARCH_ALL = new RegExp(/\w/, "i");
-    const search_f = new RegExp(
-      encodeURI(
-        typeof req.query.search === "string" ? req.query.search.trim() : ""
-      ),
-      "i"
-    );
+export type searchParameters = {
+  skip?: string;
+  limit?: string;
+  search?: string;
+  sort?: string;
+  fields?: string;
+  price_low?: string;
+  price_high?: string;
+  page?: string;
+  brand?: string;
+};
+const products_get = [
+  query([
+    "skip",
+    "limit",
+    "search",
+    "sort",
+    "fields",
+    "price_low",
+    "price_high",
+    "page",
+    "brand",
+  ])
+    .escape()
+    .optional(),
+  asyncHandler(
+    async (
+      req: Request<{}, {}, {}, searchParameters>,
+      res: Response,
+      next: NextFunction
+    ) => {
+      let productListCount: number;
 
-    const SKIP_MAX = 40;
-    const LIMIT_MAX = 40;
-    const DEFAULT_LIMIT = 20;
+      const search_f = new RegExp(
+        typeof req.query.search === "string"
+          ? req.query.search.trim().replace(/_/gi, " ")
+          : "",
+        "gi"
+      );
 
-    const allProducts = await Product.find({
-      $or: [{ name: search_f }, { brand: search_f }, { tags: search_f }],
-    })
-      .limit(limit_f > 0 && limit_f <= LIMIT_MAX ? limit_f : DEFAULT_LIMIT)
-      .skip(skip_f > 0 && skip_f <= SKIP_MAX ? skip_f : 0)
-      .populate("category");
+      console.log("Req.Query >", req.query);
 
-    return res.json({ search_count: allProducts.length, data: allProducts });
-  }
-);
+      const productsApi = new QueryApi(Product.find({}), req.query);
+
+      //~ FILTER ~
+      //most specific searches first
+      if (req.query.brand) {
+        const reg = new RegExp(req.query.brand, "gi");
+        productsApi.query.where({ brand: reg });
+      }
+
+      //least specific search
+      if (req.query.search) {
+        //ability to search for category name with search query
+        const categoryDocument = await Category.findOne({ name: search_f });
+
+        console.log("search", categoryDocument);
+
+        productsApi.query = productsApi.query.where({
+          $or: [
+            { name: search_f },
+            { brand: search_f },
+            { tags: search_f },
+            { "highlights.overview": search_f },
+            { category: categoryDocument?.id },
+          ],
+        });
+      }
+      productsApi.query.populate("category");
+      productsApi.filter();
+
+      //price filter
+      if (req.query.price_low && req.query.price_high) {
+        const price_low =
+          Number.parseFloat(req.query.price_low) >= 0
+            ? Number.parseFloat(req.query.price_low)
+            : 0;
+        const price_high =
+          Number.parseFloat(req.query.price_high) >= price_low
+            ? Number.parseFloat(req.query.price_high)
+            : Number.MAX_VALUE;
+
+        productsApi.query = productsApi.query
+          .where("price")
+          .gte(price_low)
+          .where("price")
+          .lte(price_high);
+      }
+
+      productListCount = await productsApi.query.clone().countDocuments();
+      //paginates the query to a limit & offset
+      productsApi.sort().paginate();
+
+      //Calculates how many pages & when to send 404 for non existant pages
+      const { pageNum, pageLimit, pageSkip } = productsApi.pageInfo();
+
+      //displays total num of products searched
+      if (req.query.page) {
+        if (pageNum > 1 && pageSkip >= productListCount) {
+          return next(); //res 404 - not found
+        }
+      }
+      //execute query
+      const allProducts = await productsApi.query;
+
+      return res.json({
+        search_count: productListCount,
+        total_pages: Math.ceil(productListCount / pageLimit),
+        products: allProducts,
+      });
+    }
+  ),
+];
+const productsByCategory_get = [
+  param("categoryId").escape(),
+  query([
+    "skip",
+    "limit",
+    "search",
+    "sort",
+    "fields",
+    "price_low",
+    "price_high",
+    "page",
+    "brand",
+  ])
+    .escape()
+    .optional(),
+  asyncHandler(
+    async (
+      req: Request<{ categoryId: string }, {}, {}, searchParameters>,
+      res: Response,
+      next: NextFunction
+    ) => {
+      const categoryId = req.params.categoryId;
+      if (!mongoose.isValidObjectId(categoryId)) {
+        return next(); //404
+      }
+      let productListCount: number;
+
+      const productsApi = new QueryApi(
+        Product.find({ category: categoryId }),
+        req.query
+      );
+      productsApi.query.populate("category");
+
+      //FILTER
+      productsApi.filter();
+      productListCount = await productsApi.query.clone().countDocuments();
+
+      //paginate
+      productsApi.sort().paginate();
+      const { pageLimit, pageNum, pageSkip } = productsApi.pageInfo();
+
+      if (req.query.page) {
+        if (pageNum > 1 && pageSkip >= productListCount) {
+          return next(); //res 404 - not found
+        }
+      }
+
+      // } else {
+      //   allProducts = await Product.aggregate([
+      //     {
+      //       $lookup: {
+      //         from: "categories",
+      //         localField: "category",
+      //         foreignField: "_id",
+      //         as: "category_info",
+      //       },
+      //     },
+      //     {
+      //       $match: {
+      //         "category_info.name": categorySearch,
+      //       },
+      //     }
+      //   ]);
+      // }
+      const allProducts = await productsApi.query;
+
+      return res.json({
+        search_count: productListCount,
+        total_pages: Math.ceil(productListCount / pageLimit),
+        products: allProducts,
+      });
+    }
+  ),
+];
 const products_post = [
   body("name", "Provide the product name").trim().isLength({ min: 1 }).escape(),
   body("brand", "Provide the brand name").trim().isLength({ min: 1 }).escape(),
@@ -130,15 +291,20 @@ const products_post = [
   body("quantity", "Quantity must be a positive integer number.")
     .escape()
     .default(20)
-    .isInt({ gt: 0, lt: 251 }),
+    .isInt({ gt: 0, lt: 251 })
+    .withMessage("Quantity must be no greater than 250."),
   body("category", "Categories must include correct category Ids.")
     .escape()
     .customSanitizer((value) => {
+      // console.log("value", value);
       if (typeof value === "string") {
         return [value];
+      } else {
+        return value;
       }
     })
     .custom(async (categories: string[] | mongoose.Types.ObjectId[]) => {
+      // console.log("categories", categories);
       if (!Array.isArray(categories)) {
         throw new Error("Invalid format for the value.");
       }
@@ -182,6 +348,21 @@ const products_post = [
       if (!errors.isEmpty()) {
         return res.json({ error: errors.array() });
       }
+      const product = new Product({
+        name: req.body.name,
+        brand: req.body.brand,
+        price: req.body.price,
+        retail_price: req.body.retail_price,
+        description: req.body.description,
+        highlights: req.body.highlights,
+        quantity: req.body.quantity,
+        category: req.body.category,
+        total_bought: req.body.total_bought,
+        tags: req.body.tags,
+        image_src: req.body.image_src,
+      });
+      product.save();
+      // console.log("post-product -need to connect to db to write");
       return res.sendStatus(204);
     }
   ),
@@ -777,4 +958,5 @@ export {
   review_detail_get,
   review_detail_put,
   review_detail_delete,
+  productsByCategory_get,
 };

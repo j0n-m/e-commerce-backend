@@ -53,6 +53,7 @@ const productSchema = new Schema<IProduct>({
   },
   highlights: [
     {
+      _id: false,
       heading: {
         type: String,
         minlength: 1,

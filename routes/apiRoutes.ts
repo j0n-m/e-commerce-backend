@@ -9,6 +9,9 @@ router.get("/test", controller.test_get);
 router.get("/products", controller.products_get);
 router.post("/products", controller.products_post);
 
+//all products by category
+router.get("/products/category/:categoryId", controller.productsByCategory_get);
+
 //single product
 router.get("/product/:productId", controller.product_detail_get);
 router.put("/product/:productId", controller.product_detail_put);
@@ -30,7 +33,8 @@ router.get("/review/:reviewId", controller.review_detail_get);
 router.put("/review/:reviewId", controller.review_detail_put);
 router.delete("/review/:reviewId", controller.review_detail_delete);
 
-router.use((req, res, next) => {
-  return res.sendStatus(404);
-});
+// router.use((req, res, next) => {
+//   // return res.sendStatus(404);
+//   return next();
+// });
 export default router;
