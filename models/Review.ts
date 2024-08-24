@@ -21,6 +21,7 @@ const reviewSchema = new Schema<IReview>({
   reviewer_name: {
     type: String,
     required: true,
+    minlength: 1,
   },
   review_description: {
     type: String,

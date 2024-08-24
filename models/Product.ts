@@ -68,6 +68,7 @@ const productSchema = new Schema<IProduct>({
     type: Number,
     default: 20,
     required: true,
+    min: 0,
     max: 250,
   },
   category: [
