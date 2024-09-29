@@ -2,10 +2,16 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import Category, { ICategory } from "../models/Category";
 import Product, { IProduct, HighlightType } from "../models/Product";
-import { validationResult, body, query, param } from "express-validator";
+import { validationResult, body, ValidationError } from "express-validator";
 import Review, { IReview } from "../models/Review";
-import { QueryApi } from "../utils/QueryApi";
 import { AggregateApi } from "../utils/AggregateApi";
+import Customer, {
+  CartItemZodSchema,
+  ICustomer,
+  ShippingAddress,
+} from "../models/Customer";
+import { z } from "zod";
+import bcrypt from "bcrypt";
 
 type MiddlewareFunction = (
   req: Request<any, any, any, any>,
@@ -48,22 +54,9 @@ export type searchParameters = {
   page?: string;
   brand?: string;
   deals?: string;
+  reviews?: string;
 };
 const products_get = [
-  query([
-    "skip",
-    "limit",
-    "search",
-    "sort",
-    "fields",
-    "price_low",
-    "price_high",
-    "page",
-    "brand",
-    "deals",
-  ])
-    .escape()
-    .optional(),
   asyncHandler(
     async (
       req: Request<{}, {}, {}, searchParameters>,
@@ -78,6 +71,10 @@ const products_get = [
           : "",
         "gi"
       );
+      const productReviews = new AggregateApi(Review.aggregate(), {
+        ...req.query,
+        fields: "rating,product_id",
+      });
 
       const productsApi = new AggregateApi(
         Product.aggregate([{ $match: {} }]),
@@ -162,31 +159,71 @@ const products_get = [
       //execute query
       const allProducts = await productsApi.aggregation;
 
+      if (req.query.reviews !== "false") {
+        const reviewListQuery = allProducts.map((product) => {
+          const idString: string = product._id.toString();
+          return Object.assign(
+            {},
+            { product_id: new mongoose.Types.ObjectId(idString) }
+          );
+        });
+
+        productReviews.aggregation.append({
+          $match: {
+            $or: [...reviewListQuery],
+          },
+        });
+        productReviews.filter();
+
+        productReviews.paginate();
+      } else {
+        //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
+        productReviews.aggregation.append({ $match: { _id: "100" } });
+      }
+
+      const cloneReviewAggregation = Object.create(productReviews.aggregation);
+      const reviewsInfoClone = new AggregateApi(
+        cloneReviewAggregation,
+        req.query
+      );
+      reviewsInfoClone.aggregation.append({
+        $group: {
+          _id: "$product_id",
+          rating_average: {
+            $avg: {
+              $round: ["$rating", 1],
+            },
+          },
+          rating_highest: {
+            $max: "$rating",
+          },
+          rating_lowest: {
+            $min: "$rating",
+          },
+          rating_count: {
+            $sum: 1,
+          },
+          review_ids: {
+            $push: "$_id",
+          },
+        },
+      });
+      reviewsInfoClone.paginate();
+      const reviewInfo = await reviewsInfoClone.aggregation;
+      const reviews = await productReviews.aggregation;
+
       return res.json({
         records_count: productListCount,
         total_pages: Math.ceil(productListCount / pageLimit),
         list_count: allProducts.length,
         products: allProducts,
+        // product_reviews: reviews,
+        review_info: reviewInfo,
       });
     }
   ),
 ];
 const productsByCategory_get = [
-  param("categoryId").escape(),
-  query([
-    "skip",
-    "limit",
-    "search",
-    "sort",
-    "fields",
-    "price_low",
-    "price_high",
-    "page",
-    "brand",
-    "deals",
-  ])
-    .escape()
-    .optional(),
   asyncHandler(
     async (
       req: Request<{ categoryId: string }, {}, {}, searchParameters>,
@@ -198,8 +235,13 @@ const productsByCategory_get = [
       if (!mongoose.isValidObjectId(categoryId)) {
         return next(); //404
       }
+
       let productListCount: number;
 
+      const productReviews = new AggregateApi(Review.aggregate(), {
+        ...req.query,
+        fields: "rating,product_id",
+      });
       const productsApi = new AggregateApi(
         Product.aggregate([
           { $match: { category: new mongoose.Types.ObjectId(categoryId) } },
@@ -265,21 +307,73 @@ const productsByCategory_get = [
       }
       const allProducts = await productsApi.aggregation;
 
+      if (req.query.reviews !== "false") {
+        const reviewListQuery = allProducts.map((product) => {
+          const idString: string = product._id.toString();
+          return Object.assign(
+            {},
+            { product_id: new mongoose.Types.ObjectId(idString) }
+          );
+        });
+
+        productReviews.aggregation.append({
+          $match: {
+            $or: [...reviewListQuery],
+          },
+        });
+        productReviews.filter();
+
+        productReviews.paginate();
+      } else {
+        //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
+        productReviews.aggregation.append({ $match: { _id: "100" } });
+      }
+      const cloneReviewAggregation = Object.create(productReviews.aggregation);
+      const reviewsInfoClone = new AggregateApi(
+        cloneReviewAggregation,
+        req.query
+      );
+      reviewsInfoClone.aggregation.append({
+        $group: {
+          _id: "$product_id",
+          rating_average: {
+            $avg: {
+              $round: ["$rating", 1],
+            },
+          },
+          rating_highest: {
+            $max: "$rating",
+          },
+          rating_lowest: {
+            $min: "$rating",
+          },
+          rating_count: {
+            $sum: 1,
+          },
+          review_ids: {
+            $push: "$_id",
+          },
+        },
+      });
+      reviewsInfoClone.paginate();
+      const reviewInfo = await reviewsInfoClone.aggregation;
+      const reviews = await productReviews.aggregation;
+
       return res.json({
         records_count: productListCount,
         total_pages: Math.ceil(productListCount / pageLimit),
         list_count: allProducts.length,
         products: allProducts,
+        review_info: reviewInfo,
       });
     }
   ),
 ];
 
 const products_post = [
-  body("name", "Provide the product name").trim().isLength({ min: 1 }).escape(),
-  body("brand", "Provide the brand name").trim().isLength({ min: 1 }).escape(),
+  body("name", "Provide the product name").trim().isLength({ min: 1 }),
+  body("brand", "Provide the brand name").trim().isLength({ min: 1 }),
   body("price")
-    .escape()
     .customSanitizer((value) => {
       const MAX_PRICE = 100000;
       const value_f = Number(Number.parseFloat(value).toFixed(2));
@@ -295,7 +389,6 @@ const products_post = [
       }
     }),
   body("retail_price")
-    .escape()
     .customSanitizer((value) => {
       const MAX_PRICE = 100000;
       const value_f: number = Number(Number.parseFloat(value).toFixed(2));
@@ -310,7 +403,7 @@ const products_post = [
         throw new Error("Retail Price must be greater than or equal to 0.01.");
       }
     }),
-  body("description").trim().escape().default(""),
+  body("description").trim().default(""),
   body("highlights", "The highlights field must be in the correct format.")
     .trim()
     .default([])
@@ -345,11 +438,11 @@ const products_post = [
       }
       return true;
     }),
-  body("quantity", "Quantity must be an integer number between 0 and 250.")
-    .escape()
-    .isInt({ min: 0, max: 250 }),
+  body(
+    "quantity",
+    "Quantity must be an integer number between 0 and 250."
+  ).isInt({ min: 0, max: 250 }),
   body("category", "Categories must include correct category Ids.")
-    .escape()
     .customSanitizer((value) => {
       // console.log("value", value);
       if (typeof value === "string") {
@@ -378,12 +471,11 @@ const products_post = [
       }
       return true;
     }),
-  body("total_bought", "Total bought must be a positive integer number.")
-    .escape()
-    .isInt({ min: 0 }),
+  body("total_bought", "Total bought must be a positive integer number.").isInt(
+    { min: 0 }
+  ),
   body("tags", "Tags must be in a correct list format.")
     .trim()
-    .escape()
     .default([])
     .isArray()
     .custom((arr: string[]) => {
@@ -394,7 +486,7 @@ const products_post = [
       }
       return true;
     }),
-  body("image_src").trim().escape().default(""),
+  body("image_src").trim().default(""),
 
   asyncHandler(
     (req: Request<{}, {}, IProduct>, res: Response, next: NextFunction) => {
@@ -423,39 +515,77 @@ const products_post = [
 ];
 
 const product_detail_get = [
-  param("productId").escape(),
-  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const productIdParam = req.params.productId;
+  asyncHandler(
+    async (
+      req: Request<{ productId: string }>,
+      res: Response,
+      next: NextFunction
+    ) => {
+      const productIdParam = req.params.productId;
 
-    //checks if parameter product id is in a correct format
-    //return 404 status if not correct
-    if (!mongoose.isValidObjectId(productIdParam)) {
-      return next(); //404
+      //checks if parameter product id is in a correct format
+      //return 404 status if not correct
+      if (!mongoose.isValidObjectId(productIdParam)) {
+        return next(); //404
+      }
+      const productObj = await Product.findById(productIdParam);
+      if (!productObj) {
+        return next();
+      }
+      const pipeline = Product.aggregate([
+        {
+          $match: {
+            _id: new mongoose.Types.ObjectId(productIdParam),
+          },
+        },
+      ]);
+      pipeline.lookup({
+        from: "categories",
+        localField: "category",
+        foreignField: "_id",
+        as: "category",
+      });
+      pipeline.append({
+        $addFields: {
+          discount: {
+            $let: {
+              vars: {
+                result: {
+                  $subtract: [1, { $divide: ["$price", "$retail_price"] }],
+                },
+              },
+              in: {
+                $round: ["$$result", 2],
+              },
+            },
+          },
+        },
+      });
+
+      const product = await pipeline;
+      //product not found in db
+      // const reviewPipeline = Review.aggregate([
+      //   { $match: { product_id: new mongoose.Types.ObjectId(productIdParam) } },
+      // ]);
+      // const reviews = await reviewPipeline;
+
+      return res.json({
+        product: product,
+        // reviews,
+      });
     }
-    const product = await Product.findById(productIdParam).populate("category");
-
-    //product not found in db
-    if (!product) {
-      return next(); //404
-    }
-
-    return res.json({ product: product });
-  }),
+  ),
 ];
 const product_detail_put = [
-  param("productId").escape(),
   body("name", "Provide the product name")
     .trim()
-    .escape()
     .optional()
     .isLength({ min: 1 }),
   body("brand", "Provide the brand name")
     .trim()
-    .escape()
     .optional()
     .isLength({ min: 1 }),
   body("price", "Price must be between 0.01 and 100000")
-    .escape()
     .optional()
     // .custom((value) => {
     //   if (Number(value) >= 0.01) {
@@ -466,7 +596,6 @@ const product_detail_put = [
     // }),
     .isFloat({ min: 0.01, max: 100000 }),
   body("retail_price", "Retail Price must be between 0.01 and 100000")
-    .escape()
     .optional()
     // .custom((value) => {
     //   if (Number(value) >= 0.01) {
@@ -476,10 +605,9 @@ const product_detail_put = [
     //   }
     // })
     .isFloat({ min: 0.01, max: 100000 }),
-  body("description").trim().escape().optional(),
+  body("description").trim().optional(),
   body("highlights", "The highlights field must be in the correct format.")
     .trim()
-    .escape()
     .optional()
     .customSanitizer((stringified: [] | string) => {
       if (Array.isArray(stringified)) {
@@ -513,11 +641,9 @@ const product_detail_put = [
       return true;
     }),
   body("quantity", "Quantity must be a positive integer number.")
-    .escape()
     .optional()
     .isInt({ gt: 0, lt: 251 }),
   body("category", "Categories must include correct category Ids.")
-    .escape()
     .optional()
     .custom(async (categories: string[] | mongoose.Types.ObjectId[]) => {
       // console.log("category", categories);
@@ -543,12 +669,10 @@ const product_detail_put = [
     "total_bought",
     "Total bought must be an integer number greater than or equal to 0."
   )
-    .escape()
     .optional()
     .isInt({ min: 0 }),
   body("tags", "Tags must be in a correct list format.")
     .trim()
-    .escape()
     .optional()
     .isArray()
     .custom((arr: string[]) => {
@@ -570,7 +694,6 @@ const product_detail_put = [
       next: NextFunction
     ) => {
       const productId: string = req.params.productId;
-
       if (!mongoose.isValidObjectId(productId)) {
         return next();
       }
@@ -615,7 +738,6 @@ const product_detail_put = [
   ),
 ];
 const product_detail_delete = [
-  param("productId").escape(),
   asyncHandler(
     async (
       req: Request<{ productId: string }>,
@@ -651,20 +773,6 @@ const product_detail_delete = [
 ];
 
 const categories_get = [
-  query([
-    "skip",
-    "limit",
-    "search",
-    "sort",
-    "fields",
-    "price_low",
-    "price_high",
-    "page",
-    "brand",
-    "deals",
-  ])
-    .escape()
-    .optional(),
   asyncHandler(
     async (
       req: Request<{}, {}, {}, searchParameters>,
@@ -726,8 +834,8 @@ const categories_get = [
   ),
 ];
 const categories_post = [
-  body("name", "Provide a category name.").trim().isLength({ min: 1 }).escape(),
-  body("alias").trim().escape().default(""),
+  body("name", "Provide a category name.").trim().isLength({ min: 1 }),
+  body("alias").trim().default(""),
 
   asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const errors = validationResult(req);
@@ -763,24 +871,28 @@ const categories_post = [
 ];
 
 const category_detail_get = [
-  param("categoryId").escape(),
-  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
-    const categoryId = req.params.categoryId;
-    if (!mongoose.isValidObjectId(categoryId)) {
-      return next(); //404
-    }
-    const category = await Category.findById(categoryId).select("-__v");
+  asyncHandler(
+    async (
+      req: Request<{ categoryId: string }>,
+      res: Response,
+      next: NextFunction
+    ) => {
+      const categoryId = req.params.categoryId;
+      if (!mongoose.isValidObjectId(categoryId)) {
+        return next(); //404
+      }
+      const category = await Category.findById(categoryId).select("-__v");
 
-    //product not found in db
-    if (!category) {
-      return next(); //404
-    }
+      //product not found in db
+      if (!category) {
+        return next(); //404
+      }
 
-    return res.json({ category });
-  }),
+      return res.json({ category });
+    }
+  ),
 ];
 const category_detail_put = [
-  param("categoryId").escape(),
   body("name").trim().optional().isLength({ min: 1 }),
   body("alias").trim().optional(),
   asyncHandler(
@@ -790,7 +902,7 @@ const category_detail_put = [
       next: NextFunction
     ) => {
       const categoryId = req.params.categoryId;
-      console.log("body", req.body);
+
       if (Object.keys(req.body).length === 0) {
         return res
           .status(400)
@@ -825,7 +937,6 @@ const category_detail_put = [
   ),
 ];
 const category_detail_delete = [
-  param("categoryId").escape(),
   asyncHandler(
     async (
       req: Request<{ categoryId: string }>,
@@ -935,19 +1046,15 @@ const reviews_get = asyncHandler(
 const reviews_post = [
   body("rating", "Rating must be a range from 1 to 5.")
     .trim()
-    .escape()
     .isInt({ min: 1, max: 5 }),
   body("reviewer_name", "The reviewer name cannot be empty.")
     .trim()
-    .escape()
     .isLength({ min: 1 }),
   body("review_description", "The review description cannot be blank")
     .trim()
-    .escape()
     .isLength({ min: 1 }),
   body("review_date", "Review date must be in the ISO8601 time format.")
     .trim()
-    .escape()
     .default(new Date())
     .isISO8601(),
   body(
@@ -955,12 +1062,10 @@ const reviews_post = [
     "Review edit date must be in the ISO8601 time format."
   )
     .trim()
-    .escape()
     .optional()
     .isISO8601(),
   body("product_id", "Product id must be a valid id.")
     .trim()
-    .escape()
     .custom(async (id) => {
       const productId = id;
       if (!mongoose.isValidObjectId(productId)) {
@@ -996,9 +1101,80 @@ const reviews_post = [
     }
   ),
 ];
+const reviewsByProduct_get = [
+  asyncHandler(
+    async (req: Request<{ productId: string }>, res: Response, next) => {
+      const productId = req.params.productId;
+
+      if (!mongoose.isValidObjectId(productId)) {
+        return next(); //404
+      }
+      const product = await Product.findById(productId);
+      if (!product) {
+        return next();
+      }
+      let reviewListCount: number;
+      let reviewsApi = new AggregateApi(
+        Review.aggregate([
+          { $match: { product_id: new mongoose.Types.ObjectId(productId) } },
+        ]),
+        req.query
+      );
+
+      if (req.query.populate === "true") {
+        reviewsApi.populate("products", "product_id", "_id", "product_id");
+      }
+
+      reviewsApi.filter();
+
+      const clone = new AggregateApi(reviewsApi.aggregation, req.query);
+      const reviewInfoClone = Object.create(clone.aggregation);
+      reviewInfoClone.append({
+        $group: {
+          _id: null,
+          rating_average: {
+            $avg: {
+              $round: ["$rating", 1],
+            },
+          },
+          rating_highest: {
+            $max: "$rating",
+          },
+          rating_lowest: {
+            $min: "$rating",
+          },
+          rating_count: {
+            $sum: 1,
+          },
+        },
+      });
+      reviewInfoClone.project("-_id");
+
+      reviewListCount = (await clone.aggregation).length;
+      const rating_info = await reviewInfoClone;
+
+      //PAGINATE
+      reviewsApi.sort().paginate();
+      const { pageSkip, pageLimit, pageNum } = reviewsApi.pageInfo();
+
+      if (req.query.page) {
+        if (pageNum > 1 && pageSkip >= reviewListCount) {
+          return next(); //res 404 - not found
+        }
+      }
+      const allReviews = await reviewsApi.aggregation;
+      return res.json({
+        records_count: reviewListCount,
+        total_pages: Math.ceil(reviewListCount / pageLimit),
+        list_count: allReviews.length,
+        rating_info,
+        reviews: allReviews,
+      });
+    }
+  ),
+];
 
 const review_detail_get = [
-  param("reviewId").escape(),
   asyncHandler(
     async (
       req: Request<{ reviewId: string }>,
@@ -1021,25 +1197,20 @@ const review_detail_get = [
   ),
 ];
 const review_detail_put = [
-  param("reviewId").escape(),
   body("rating", "Rating must be a range from 1 to 5.")
     .trim()
-    .escape()
     .optional()
     .isInt({ min: 1, max: 5 }),
   body("reviewer_name", "The reviewer name cannot be empty.")
     .trim()
-    .escape()
     .optional()
     .isLength({ min: 1 }),
   body("review_description", "The review description cannot be blank")
     .trim()
-    .escape()
     .optional()
     .isLength({ min: 1 }),
   body("review_date", "Review date must be in the ISO8601 time format.")
     .trim()
-    .escape()
     .optional()
     .isISO8601(),
   body(
@@ -1047,12 +1218,10 @@ const review_detail_put = [
     "Review edit date must be in the ISO8601 time format."
   )
     .trim()
-    .escape()
     .default(new Date())
     .isISO8601(),
   body("product_id", "Product id must be a valid id.")
     .trim()
-    .escape()
     .optional()
     .isMongoId(),
   asyncHandler(
@@ -1078,6 +1247,7 @@ const review_detail_put = [
       if (!review) {
         return next(); //404
       }
+
       if (req.body.product_id) {
         const product = await Product.findById(req.body.product_id);
         if (!product) {
@@ -1107,7 +1277,6 @@ const review_detail_put = [
   ),
 ];
 const review_detail_delete = [
-  param("reviewId").escape(),
   asyncHandler(
     async (
       req: Request<{ reviewId: string }>,
@@ -1121,6 +1290,516 @@ const review_detail_delete = [
       const deleteReview = await Review.findByIdAndDelete(reviewId);
       if (!deleteReview) {
         return next();
+      }
+      return res.sendStatus(200);
+    }
+  ),
+];
+
+const customer_list = asyncHandler(
+  async (
+    req: Request<{}, {}, ICustomer, searchParameters>,
+    res: Response,
+    next
+  ) => {
+    const customerApi = new AggregateApi(
+      Customer.aggregate([{ $match: {} }]),
+      req.query
+    );
+
+    if (req.user?.is_admin) {
+      //if not authenticated admin, you will not see password or shipping address of other users.
+      const passField = new RegExp(/password/, "i");
+      req.query.fields = req.query.fields
+        ?.split(",")
+        .filter((field) => !passField.test(field))
+        .join(",");
+      const LimitedCustomerKeys =
+        "_id,username,email,created_at,first_name,last_name,is_admin,user_code,order_history";
+      req.query.fields = req.query.fields?.split(",")?.length
+        ? req.query.fields
+        : LimitedCustomerKeys;
+    }
+
+    customerApi.filter().sort("username").paginate();
+
+    const clone = new AggregateApi(customerApi.aggregation, req.query);
+
+    const customerListCount = (await clone.aggregation).length;
+    const { pageLimit, pageSkip, pageNum } = customerApi.pageInfo();
+    if (req.query.page) {
+      if (pageNum > 1 && pageSkip >= customerListCount) {
+        return next(); //res 404 - not found
+      }
+    }
+
+    const allCustomers = await customerApi.aggregation;
+
+    return res.json({
+      records_count: customerListCount,
+      total_pages: Math.ceil(customerListCount / pageLimit),
+      list_count: allCustomers.length,
+      customers: allCustomers,
+    });
+  }
+);
+const customer_detail = asyncHandler(
+  async (req: Request<{ customerId: string }>, res: Response, next) => {
+    const customerId = req.params.customerId;
+    if (!mongoose.isValidObjectId(customerId)) {
+      return next();
+    }
+    const customer = await Customer.findById(customerId, { __v: 0 });
+    if (!customer) {
+      return next();
+    }
+    if (!req.user?.is_admin) {
+      //non admin users see limted keys values of other customers
+      const { password, shipping_address, ...limitedCustomerObj } =
+        customer.toJSON();
+      return res.json({ customer: limitedCustomerObj });
+    } else {
+      return res.json({ customer });
+    }
+  }
+);
+const customer_detail_delete = asyncHandler(
+  async (req: Request<{ customerId: string }>, res: Response, next) => {
+    const customerId = req.params.customerId;
+    if (!mongoose.isValidObjectId(customerId)) {
+      return next();
+    }
+    const customerToBeDeleted = await Customer.findByIdAndDelete(customerId);
+    if (!customerToBeDeleted) {
+      return next();
+    }
+    return res.sendStatus(200);
+  }
+);
+const customer_create = [
+  body("username", "Username must be between 3 to 16 characters long.")
+    .trim()
+    .isLength({ min: 3, max: 16 })
+    .custom(async (user) => {
+      const existingUser = await Customer.findOne({ username: user });
+      if (existingUser) {
+        throw new Error("Username already exists.");
+      } else {
+        return true;
+      }
+    }),
+  body(
+    "email",
+    "Email must be in a valid email format. (e.g. name@example.com)"
+  )
+    .trim()
+    .isEmail()
+    .isLength({ min: 4 })
+    .custom(async (email) => {
+      const existingEmail = await Customer.findOne({ email });
+      if (existingEmail) {
+        throw new Error("Email already exists.");
+      }
+    }),
+  body("password", "Password must be at least 5 characters long.")
+    .trim()
+    .isLength({ min: 5 }),
+  body("created_at", "Creation date is not in a valid time format.")
+    .optional()
+    .isISO8601(),
+  body("first_name", "First Name must be at least 2 characters long.")
+    .trim()
+    .isLength({ min: 2 }),
+  body("last_name", "Last Name must be at least 2 characters long.")
+    .trim()
+    .isLength({ min: 1 }),
+  body("is_admin", "isAdmin must be a boolean value.")
+    .default(false)
+    .isBoolean(),
+  body(
+    "user_code",
+    "userCode must be a valid integer and and active user code."
+  )
+    .default(1)
+    .custom((v) => {
+      const acceptedValues = [1, 2, 3, 4] as const;
+      if (acceptedValues.includes(v)) {
+        return true;
+      }
+      return false;
+    }),
+  body("shipping_address", "Shipping address is in an invalid format.")
+    .optional({ values: "null" })
+    .isObject()
+    .custom((data) => {
+      const keys = Object.keys(data);
+      if (keys.length <= 0) {
+        throw new Error(
+          "Shipping address object must be either null or contain the required key values."
+        );
+      }
+      if (!keys.includes("name") || !keys.includes("address")) {
+        throw new Error(
+          "Shipping address must contain the name and address sub fields."
+        );
+      }
+      if (keys.length === 3 && !keys.includes("phone")) {
+        throw new Error("Shipping address has invalid sub fields.");
+      }
+      return true;
+    }),
+  body(
+    "shipping_address.name",
+    "Shipping Name must be at least 3 characters long."
+  )
+    .trim()
+    .optional()
+    .isLength({ min: 3 }),
+  body("shipping_address.phone", "Invalid shipping phone number")
+    .trim()
+    .optional()
+    .isMobilePhone("en-US"),
+  body("shipping_address.address", "Shipping Address must be an object.")
+    .optional()
+    .isObject()
+    .custom((data) => {
+      const result = ShippingAddress.safeParse(data);
+      if (result.success) {
+        return true;
+      }
+      throw result.error.errors;
+    }),
+  body(
+    "shipping_address.address.postal_code",
+    "Shipping Address's postal code is invalid."
+  )
+    .trim()
+    .optional()
+    .isPostalCode("US"),
+  body("order_history", "Order history is in an invalid format.")
+    .optional({ values: "null" })
+    .isObject()
+    .custom((data) => {
+      const keys = Object.keys(data);
+      if (keys.length <= 0) {
+        throw new Error(
+          "Order history must be either null or contain the required key values."
+        );
+      }
+      if (!keys.includes("order_date") || !keys.includes("cart")) {
+        throw new Error(
+          "Order history must contain the order_date and cart sub fields."
+        );
+      }
+      if (keys.length !== 2) {
+        throw new Error("Order history has invalid sub fields.");
+      }
+      return true;
+    }),
+  body(
+    "order_history.order_date",
+    "Order date must be in a ISO8601 date format."
+  )
+    .optional()
+    .isISO8601(),
+  body(
+    "order_history.cart",
+    "Order history cart list must have at least one item."
+  )
+    .optional()
+    .isArray({ min: 1 })
+    .custom((cartData) => {
+      const new_s = z.array(CartItemZodSchema, {
+        message: "Order history cart list must have at least one item.",
+      });
+      const result = new_s.safeParse(cartData);
+      if (result.success) {
+        return true;
+      } else {
+        throw result.error.errors;
+      }
+    }),
+  body("order_history.cart.*._id", "item id is invalid.")
+    .exists({ values: "falsy" })
+    .isMongoId(),
+  body("order_history.cart.*.category.*._id", "category id is invalid.")
+    .exists({ values: "falsy" })
+    .isMongoId(),
+
+  asyncHandler(async (req: Request<{}, {}, ICustomer>, res: Response, next) => {
+    /** SIGNUP FORM WILL CHECK FOR DUPLICATE EMAILS AND USERNAMES */
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      const oneError = errors.array()[0] as ValidationError & { path: string };
+      return res.status(400).json({
+        error: errors.array(),
+        single_error: { [oneError.path]: oneError.msg },
+      });
+    }
+    if (!req.body.created_at) {
+      req.body.created_at = new Date();
+    }
+    if (!req.body.shipping_address) {
+      req.body.shipping_address = null;
+    }
+    if (!req.body.order_history) {
+      req.body.order_history = null;
+    }
+    const hashedPass = await bcrypt.hash(req.body.password, 10);
+
+    const customer = new Customer({
+      username: req.body.username,
+      email: req.body.email,
+      password: hashedPass,
+      created_at: req.body.created_at,
+      first_name: req.body.first_name,
+      last_name: req.body.last_name,
+      is_admin: req.body.is_admin,
+      user_code: req.body.user_code,
+      shipping_address: req.body.shipping_address,
+      order_history: req.body.order_history,
+    });
+    await customer.save();
+
+    //create Customer object will fields filled in and save()
+    return res.json({
+      "saved customer": customer,
+    });
+  }),
+];
+
+const customer_detail_put = [
+  body("username", "Username must be between 3 to 16 characters long.")
+    .trim()
+    .optional()
+    .isLength({ min: 3, max: 16 })
+    .custom(async (user) => {
+      const existingUser = await Customer.findOne({ username: user });
+      if (existingUser) {
+        throw new Error("Username already exists.");
+      } else {
+        return true;
+      }
+    }),
+  body(
+    "email",
+    "Email must be in a valid email format. (e.g. name@example.com)"
+  )
+    .trim()
+    .optional()
+    .isEmail()
+    .isLength({ min: 4 })
+    .custom(async (email) => {
+      const existingEmail = await Customer.findOne({ email });
+      if (existingEmail) {
+        throw new Error("Email already exists.");
+      }
+    }),
+  body("password", "Password must be at least 5 characters long.")
+    .trim()
+    .optional()
+    .isLength({ min: 5 }),
+  body("created_at", "Creation date is not in a valid time format.")
+    .optional()
+    .isISO8601(),
+  body("first_name", "First Name must be at least 2 characters long.")
+    .trim()
+    .optional()
+    .isLength({ min: 2 }),
+  body("last_name", "Last Name must be at least 2 characters long.")
+    .trim()
+    .optional()
+    .isLength({ min: 1 }),
+  body("is_admin", "isAdmin must be a boolean value.")
+    .optional()
+    .default(false)
+    .isBoolean(),
+  body(
+    "user_code",
+    "userCode must be a valid integer and and active user code."
+  )
+    .optional()
+    .default(1)
+    .custom((v) => {
+      const acceptedValues = [1, 2, 3, 4] as const;
+      if (acceptedValues.includes(v)) {
+        return true;
+      }
+      return false;
+    }),
+  body(
+    "shipping_address",
+    "Shipping address is in an invalid format. Must be an object."
+  )
+    .optional({ values: "null" })
+    .isObject()
+    .custom((data) => {
+      const keys = Object.keys(data);
+      if (keys.length <= 0) {
+        throw new Error(
+          "Shipping address object must be either null or contain the required key fields [address,name]."
+        );
+      }
+      if (!keys.includes("name") || !keys.includes("address")) {
+        throw new Error(
+          "Shipping address must contain the name and address sub fields."
+        );
+      }
+      if (keys.length === 3 && !keys.includes("phone")) {
+        throw new Error("Shipping address has invalid sub fields.");
+      }
+      return true;
+    }),
+  body(
+    "shipping_address.name",
+    "Shipping Name must be at least 3 characters long."
+  )
+    .trim()
+    .optional()
+    .isLength({ min: 3 }),
+  body("shipping_address.phone", "Invalid shipping phone number")
+    .trim()
+    .optional()
+    .isMobilePhone("en-US"),
+  body("shipping_address.address", "Shipping Address must be an object.")
+    .optional()
+    .isObject()
+    .custom((data) => {
+      const result = ShippingAddress.safeParse(data);
+      if (result.success) {
+        return true;
+      }
+      throw result.error.errors;
+    }),
+  body(
+    "shipping_address.address.postal_code",
+    "Shipping Address's postal code is invalid."
+  )
+    .trim()
+    .optional()
+    .isPostalCode("US"),
+  body(
+    "order_history",
+    "Order history is in an invalid format. Must be an object."
+  )
+    .optional({ values: "null" })
+    .isObject()
+    .custom((data) => {
+      const keys = Object.keys(data);
+      if (keys.length <= 0) {
+        throw new Error(
+          "Order history must be either null or contain the required key fields: [order_date,cart]."
+        );
+      }
+      if (!keys.includes("order_date") || !keys.includes("cart")) {
+        throw new Error(
+          "Order history must contain the order_date and cart sub fields."
+        );
+      }
+      if (keys.length !== 2) {
+        throw new Error("Order history has invalid sub fields.");
+      }
+      return true;
+    }),
+  body(
+    "order_history.order_date",
+    "Order date must be in a ISO8601 date format."
+  )
+    .optional()
+    .isISO8601(),
+  body(
+    "order_history.cart",
+    "Order history cart list must have at least one item."
+  )
+    .optional()
+    .isArray({ min: 1 })
+    .custom((cartData) => {
+      const new_s = z.array(CartItemZodSchema, {
+        message: "Order history cart list must have at least one item.",
+      });
+      const result = new_s.safeParse(cartData);
+      if (result.success) {
+        return true;
+      } else {
+        throw result.error.errors;
+      }
+    }),
+  body("order_history.cart.*._id", "item id is invalid.")
+    .optional()
+    .exists({ values: "falsy" })
+    .isMongoId(),
+  body("order_history.cart.*.category.*._id", "category id is invalid.")
+    .optional()
+    .exists({ values: "falsy" })
+    .isMongoId(),
+
+  asyncHandler(
+    async (
+      req: Request<{ customerId: string }, {}, Partial<ICustomer>>,
+      res: Response,
+      next
+    ) => {
+      const customerId = req.params.customerId;
+      if (!mongoose.isValidObjectId(customerId)) {
+        return next();
+      }
+      if (!req.user?.is_admin) {
+        //filters out people who are not admin (or later -> the currently logged in user)
+        return res.sendStatus(403);
+      }
+      if (Object.keys(req.body).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "No data was sent from the payload." });
+      }
+      const error = validationResult(req);
+      if (!error.isEmpty()) {
+        return res.status(400).json({ error: error.array() });
+      }
+      //verify that the customer to update exists in the db
+      let customer = await Customer.findById(customerId);
+      if (!customer) {
+        return next(); //404
+      }
+      customer = customer.toJSON();
+      const hashedPass = req.body.password
+        ? await bcrypt.hash(req.body.password, 10)
+        : null;
+
+      // const testEdit = new Customer({
+      //   _id: customer._id,
+      //   username: req.body.username || customer.username,
+      //   email: req.body.email || customer.email,
+      //   password: hashedPass || customer.password,
+      //   created_at: req.body.created_at || customer.created_at,
+      //   first_name: req.body.first_name || customer.first_name,
+      //   last_name: req.body.last_name || customer.last_name,
+      //   is_admin: req.body.is_admin || customer.is_admin,
+      //   user_code: req.body.user_code || customer.user_code,
+      //   shipping_address:
+      //     req.body.shipping_address || customer.shipping_address,
+      //   order_history: req.body.order_history || customer.order_history,
+      // });
+      const updateCustomer = await Customer.findByIdAndUpdate(customerId, {
+        _id: customer._id,
+        username: req.body.username || customer.username,
+        email: req.body.email || customer.email,
+        password: hashedPass || customer.password,
+        created_at: req.body.created_at || customer.created_at,
+        first_name: req.body.first_name || customer.first_name,
+        last_name: req.body.last_name || customer.last_name,
+        is_admin: req.body.is_admin || customer.is_admin,
+        user_code: req.body.user_code || customer.user_code,
+        shipping_address:
+          req.body.shipping_address || customer.shipping_address,
+        order_history: req.body.order_history || customer.order_history,
+      });
+
+      if (!updateCustomer) {
+        return res.status(400).json({
+          error: `Error! Review: ${customerId} could not be updated.`,
+        });
       }
       return res.sendStatus(200);
     }
@@ -1145,4 +1824,10 @@ export {
   review_detail_put,
   review_detail_delete,
   productsByCategory_get,
+  reviewsByProduct_get,
+  customer_list,
+  customer_create,
+  customer_detail,
+  customer_detail_delete,
+  customer_detail_put,
 };

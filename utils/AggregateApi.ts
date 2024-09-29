@@ -14,8 +14,9 @@ export class AggregateApi {
     if (this.queryRecord.fields) {
       const selectionArr = this.queryRecord.fields
         .trim()
-        .replace(/\s/g, "")
-        .split(",");
+        .replace(/\s|undefined/g, "")
+        .split(",")
+        .filter((v) => v !== "");
 
       //rules to prevent crashing the projection query
       const firstChar = selectionArr[0][0];
@@ -97,7 +98,7 @@ export class AggregateApi {
 
     if (this.queryRecord.limit) {
       //sanitizes the limit input
-      const pageLimit_f = Number(this.queryRecord.limit);
+      const pageLimit_f = Number(Number.parseInt(this.queryRecord.limit));
       pageLimit = isValidLimit(pageLimit_f) ? pageLimit_f : default_limit;
     } else {
       pageLimit = default_limit;

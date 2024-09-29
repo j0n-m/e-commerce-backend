@@ -6,6 +6,7 @@ import "dotenv/config";
 import mongoose from "mongoose";
 import { connectToDB } from "./db/connect";
 import cors = require("cors");
+import cookieParser = require("cookie-parser");
 
 const app = express();
 
@@ -25,10 +26,32 @@ mongoose.set("strictQuery", false);
 //connection to the DB
 connectToDB();
 
+//corsOptions.origin to allow all domains to access the apis
+
+// origin: function (origin, callback) {
+
+//   //true makes sure the if statement always runs
+//   //this allows ALL domains to access
+//   if (true || !origin) {
+//     callback(null, true);
+//   } else {
+//     callback(new Error("Not allowed by CORS"));
+//   }
+// },
+
+const corsOptions: cors.CorsOptions = {
+  origin: "http://localhost:5173",
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  preflightContinue: false,
+  allowedHeaders: ["Content-Type"],
+  credentials: true,
+};
+
 //**Middlewares */
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(morgan("tiny"));
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.urlencoded({ extended: false }));
 
 //**End Middleware */
