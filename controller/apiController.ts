@@ -20,10 +20,10 @@ type MiddlewareFunction = (
 ) => any;
 //error handler to prevent redundancy with try-catch blocks in all endpoints
 function asyncHandler(func: MiddlewareFunction) {
-  return (req: Request, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (mongoose.connection.readyState === 1) {
-        func(req, res, next);
+        await func(req, res, next);
       } else {
         let dbError = new Error();
         dbError.message = "DB must be connected to perform this request.";
@@ -56,173 +56,172 @@ export type searchParameters = {
   deals?: string;
   reviews?: string;
 };
-const products_get = [
-  asyncHandler(
-    async (
-      req: Request<{}, {}, {}, searchParameters>,
-      res: Response,
-      next: NextFunction
-    ) => {
-      let productListCount: number;
+const products_get = asyncHandler(
+  async (
+    req: Request<{}, {}, {}, searchParameters>,
+    res: Response,
+    next: NextFunction
+  ) => {
+    let productListCount: number;
 
-      const search_f = new RegExp(
-        typeof req.query.search === "string"
-          ? req.query.search.trim().replace(/_/gi, " ")
-          : "",
-        "gi"
-      );
-      const productReviews = new AggregateApi(Review.aggregate(), {
-        ...req.query,
-        fields: "rating,product_id",
+    const search_f = new RegExp(
+      typeof req.query.search === "string"
+        ? req.query.search.trim().replace(/_/gi, " ")
+        : "",
+      "gi"
+    );
+    const productReviews = new AggregateApi(Review.aggregate(), {
+      ...req.query,
+      fields: "rating,product_id",
+    });
+
+    const productsApi = new AggregateApi(
+      Product.aggregate([{ $match: {} }]),
+      req.query
+    ).populate("categories", "category", "_id", "category");
+
+    //~ FILTER ~
+    //most specific searches first
+    if (req.query.brand) {
+      const reg = new RegExp(req.query.brand, "gi");
+      productsApi.aggregation.append({ $match: { brand: reg } });
+    }
+
+    //least specific search
+    if (req.query.search) {
+      productsApi.aggregation.append({
+        $match: {
+          $or: [
+            { name: search_f },
+            { brand: search_f },
+            { tags: search_f },
+            { "highlights.overview": search_f },
+            { "category.name": search_f },
+          ],
+        },
       });
-
-      const productsApi = new AggregateApi(
-        Product.aggregate([{ $match: {} }]),
-        req.query
-      ).populate("categories", "category", "_id", "category");
-
-      //~ FILTER ~
-      //most specific searches first
-      if (req.query.brand) {
-        const reg = new RegExp(req.query.brand, "gi");
-        productsApi.aggregation.append({ $match: { brand: reg } });
-      }
-
-      //least specific search
-      if (req.query.search) {
-        productsApi.aggregation.append({
-          $match: {
-            $or: [
-              { name: search_f },
-              { brand: search_f },
-              { tags: search_f },
-              { "highlights.overview": search_f },
-              { "category.name": search_f },
-            ],
-          },
-        });
-      }
-      if (req.query.deals === "true") {
-        productsApi.aggregation.append({
-          $addFields: {
-            discount: {
-              $let: {
-                vars: {
-                  result: {
-                    $subtract: [1, { $divide: ["$price", "$retail_price"] }],
-                  },
+    }
+    if (req.query.deals === "true") {
+      productsApi.aggregation.append({
+        $addFields: {
+          discount: {
+            $let: {
+              vars: {
+                result: {
+                  $subtract: [1, { $divide: ["$price", "$retail_price"] }],
                 },
-                in: {
-                  $round: ["$$result", 2],
-                },
+              },
+              in: {
+                $round: ["$$result", 2],
               },
             },
           },
-        });
-      }
-      productsApi.filter();
+        },
+      });
+    }
+    productsApi.filter();
 
-      //price filter
-      if (req.query.price_low && req.query.price_high) {
-        const price_low =
-          Number.parseFloat(req.query.price_low) >= 0
-            ? Number.parseFloat(req.query.price_low)
-            : 0;
-        const price_high =
-          Number.parseFloat(req.query.price_high) >= price_low
-            ? Number.parseFloat(req.query.price_high)
-            : Number.MAX_VALUE;
+    //price filter
+    if (req.query.price_low && req.query.price_high) {
+      const price_low =
+        Number.parseFloat(req.query.price_low) >= 0
+          ? Number.parseFloat(req.query.price_low)
+          : 0;
+      const price_high =
+        Number.parseFloat(req.query.price_high) >= price_low
+          ? Number.parseFloat(req.query.price_high)
+          : Number.MAX_VALUE;
 
-        productsApi.aggregation.append({
-          $match: {
-            price: {
-              $gte: price_low,
-              $lte: price_high,
-            },
-          },
-        });
-      }
-      const clone = new AggregateApi(productsApi.aggregation, req.query);
-      productListCount = (await clone.aggregation).length;
-      //paginates the query to a limit & offset
-      productsApi.sort().paginate();
-
-      //Calculates how many pages & when to send 404 for non existant pages
-      const { pageNum, pageLimit, pageSkip } = productsApi.pageInfo();
-
-      //displays total num of products searched
-      if (req.query.page) {
-        if (pageNum > 1 && pageSkip >= productListCount) {
-          return next(); //res 404 - not found
-        }
-      }
-      //execute query
-      const allProducts = await productsApi.aggregation;
-
-      if (req.query.reviews !== "false") {
-        const reviewListQuery = allProducts.map((product) => {
-          const idString: string = product._id.toString();
-          return Object.assign(
-            {},
-            { product_id: new mongoose.Types.ObjectId(idString) }
-          );
-        });
-
-        productReviews.aggregation.append({
-          $match: {
-            $or: [...reviewListQuery],
-          },
-        });
-        productReviews.filter();
-
-        productReviews.paginate();
-      } else {
-        //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
-        productReviews.aggregation.append({ $match: { _id: "100" } });
-      }
-
-      const cloneReviewAggregation = Object.create(productReviews.aggregation);
-      const reviewsInfoClone = new AggregateApi(
-        cloneReviewAggregation,
-        req.query
-      );
-      reviewsInfoClone.aggregation.append({
-        $group: {
-          _id: "$product_id",
-          rating_average: {
-            $avg: {
-              $round: ["$rating", 1],
-            },
-          },
-          rating_highest: {
-            $max: "$rating",
-          },
-          rating_lowest: {
-            $min: "$rating",
-          },
-          rating_count: {
-            $sum: 1,
-          },
-          review_ids: {
-            $push: "$_id",
+      productsApi.aggregation.append({
+        $match: {
+          price: {
+            $gte: price_low,
+            $lte: price_high,
           },
         },
       });
-      reviewsInfoClone.paginate();
-      const reviewInfo = await reviewsInfoClone.aggregation;
-      const reviews = await productReviews.aggregation;
-
-      return res.json({
-        records_count: productListCount,
-        total_pages: Math.ceil(productListCount / pageLimit),
-        list_count: allProducts.length,
-        products: allProducts,
-        // product_reviews: reviews,
-        review_info: reviewInfo,
-      });
     }
-  ),
-];
+    const clone = new AggregateApi(productsApi.aggregation, req.query);
+    productListCount = (await clone.aggregation).length;
+    //paginates the query to a limit & offset
+    productsApi.sort().paginate();
+
+    //Calculates how many pages & when to send 404 for non existant pages
+    const { pageNum, pageLimit, pageSkip } = productsApi.pageInfo();
+
+    //displays total num of products searched
+    if (req.query.page) {
+      if (pageNum > 1 && pageSkip >= productListCount) {
+        return next(); //res 404 - not found
+      }
+    }
+    //execute query
+    const allProducts = await productsApi.aggregation;
+
+    if (req.query.reviews !== "false") {
+      const reviewListQuery = allProducts.map((product) => {
+        const idString: string = product._id.toString();
+        return Object.assign(
+          {},
+          { product_id: new mongoose.Types.ObjectId(idString) }
+        );
+      });
+
+      productReviews.aggregation.append({
+        $match: {
+          $or: [...reviewListQuery],
+        },
+      });
+      productReviews.filter();
+
+      productReviews.paginate();
+    } else {
+      //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
+      productReviews.aggregation.append({ $match: { _id: "100" } });
+    }
+
+    const cloneReviewAggregation = Object.create(productReviews.aggregation);
+    const reviewsInfoClone = new AggregateApi(
+      cloneReviewAggregation,
+      req.query
+    );
+    reviewsInfoClone.aggregation.append({
+      $group: {
+        _id: "$product_id",
+        rating_average: {
+          $avg: {
+            $round: ["$rating", 1],
+          },
+        },
+        rating_highest: {
+          $max: "$rating",
+        },
+        rating_lowest: {
+          $min: "$rating",
+        },
+        rating_count: {
+          $sum: 1,
+        },
+        review_ids: {
+          $push: "$_id",
+        },
+      },
+    });
+    reviewsInfoClone.paginate();
+    const reviewInfo = await reviewsInfoClone.aggregation;
+    const reviews = await productReviews.aggregation;
+
+    return res.json({
+      records_count: productListCount,
+      total_pages: Math.ceil(productListCount / pageLimit),
+      list_count: allProducts.length,
+      products: allProducts,
+      // product_reviews: reviews,
+      review_info: reviewInfo,
+    });
+  }
+);
+
 const productsByCategory_get = [
   asyncHandler(
     async (
