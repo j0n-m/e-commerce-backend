@@ -108,14 +108,12 @@ const customerSchema = new Schema<ICustomer>({
     type: String,
     required: true,
     minlength: 4,
-    lowercase: true,
     unique: true,
   },
   password: {
     type: String,
     required: true,
     minlength: 5,
-    lowercase: true,
   },
   created_at: {
     type: Date,

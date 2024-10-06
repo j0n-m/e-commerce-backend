@@ -1491,6 +1491,7 @@ const customer_create = [
     }),
   body("password", "Password must be at least 5 characters long.")
     .trim()
+    .isString()
     .isLength({ min: 5 }),
   body("created_at", "Creation date is not in a valid time format.")
     .optional()
@@ -1582,6 +1583,7 @@ const customer_create = [
     if (!req.body.shipping_address) {
       req.body.shipping_address = null;
     }
+    console.log("hashing:", req.body.password);
     const hashedPass = await bcrypt.hash(req.body.password, 10);
 
     const customer = new Customer({
