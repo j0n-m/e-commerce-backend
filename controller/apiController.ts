@@ -1,17 +1,19 @@
 import { Request, Response, NextFunction } from "express";
-import mongoose from "mongoose";
+import mongoose, { isValidObjectId } from "mongoose";
 import Category, { ICategory } from "../models/Category";
 import Product, { IProduct, HighlightType } from "../models/Product";
 import { validationResult, body, ValidationError } from "express-validator";
 import Review, { IReview } from "../models/Review";
 import { AggregateApi } from "../utils/AggregateApi";
 import Customer, {
+  CartItemsType,
   CartItemZodSchema,
   ICustomer,
   ShippingAddress,
 } from "../models/Customer";
 import { z } from "zod";
 import bcrypt from "bcrypt";
+import OrderHistory, { IOrderHistory } from "../models/OrderHistory";
 
 type MiddlewareFunction = (
   req: Request<any, any, any, any>,
@@ -70,10 +72,6 @@ const products_get = asyncHandler(
         : "",
       "gi"
     );
-    const productReviews = new AggregateApi(Review.aggregate(), {
-      ...req.query,
-      fields: "rating,product_id",
-    });
 
     const productsApi = new AggregateApi(
       Product.aggregate([{ $match: {} }]),
@@ -158,6 +156,14 @@ const products_get = asyncHandler(
     //execute query
     const allProducts = await productsApi.aggregation;
 
+    const productReviews = new AggregateApi(
+      Review.aggregate([{ $match: {} }]),
+      {
+        ...req.query,
+        fields: "rating,product_id",
+      }
+    );
+
     if (req.query.reviews !== "false") {
       const reviewListQuery = allProducts.map((product) => {
         const idString: string = product._id.toString();
@@ -166,18 +172,26 @@ const products_get = asyncHandler(
           { product_id: new mongoose.Types.ObjectId(idString) }
         );
       });
+      if (reviewListQuery.length) {
+        productReviews.aggregation.append({
+          $match: {
+            $or: [...reviewListQuery],
+          },
+        });
+      } else {
+        productReviews.aggregation.append({
+          $match: { unknown_field: "unknown_field" },
+        });
+      }
 
-      productReviews.aggregation.append({
-        $match: {
-          $or: [...reviewListQuery],
-        },
-      });
       productReviews.filter();
 
       productReviews.paginate();
     } else {
       //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
-      productReviews.aggregation.append({ $match: { _id: "100" } });
+      productReviews.aggregation.append({
+        $match: { unknown_field: "unknown_field" },
+      });
     }
 
     const cloneReviewAggregation = Object.create(productReviews.aggregation);
@@ -216,7 +230,7 @@ const products_get = asyncHandler(
       total_pages: Math.ceil(productListCount / pageLimit),
       list_count: allProducts.length,
       products: allProducts,
-      // product_reviews: reviews,
+      product_reviews: reviews,
       review_info: reviewInfo,
     });
   }
@@ -314,18 +328,25 @@ const productsByCategory_get = [
             { product_id: new mongoose.Types.ObjectId(idString) }
           );
         });
-
-        productReviews.aggregation.append({
-          $match: {
-            $or: [...reviewListQuery],
-          },
-        });
+        if (reviewListQuery.length) {
+          productReviews.aggregation.append({
+            $match: {
+              $or: [...reviewListQuery],
+            },
+          });
+        } else {
+          productReviews.aggregation.append({
+            $match: { unknown_field: "unknown_field" },
+          });
+        }
         productReviews.filter();
 
         productReviews.paginate();
       } else {
         //use placeholder data to append to the aggregation pipeline that will always return nothing from the db
-        productReviews.aggregation.append({ $match: { _id: "100" } });
+        productReviews.aggregation.append({
+          $match: { unknown_field: "unknown_field" },
+        });
       }
       const cloneReviewAggregation = Object.create(productReviews.aggregation);
       const reviewsInfoClone = new AggregateApi(
@@ -755,15 +776,18 @@ const product_detail_delete = [
       //verify that reviews are not referenced to the product, otherwise send error
       const allReviewsByProduct = await Review.find(
         { product_id: productId },
-        { reviewer_name: 1 }
+        { reviewer: 1, reviewer_name: 1 }
       );
       if (allReviewsByProduct.length > 0) {
+        for (const review of allReviewsByProduct) {
+          await review.deleteOne();
+        }
         //send error
-        return res.status(400).json({
-          error:
-            "Delete the following review(s) that are referencing this product.",
-          data: allReviewsByProduct,
-        });
+        // return res.status(400).json({
+        //   error:
+        //     "Delete the following review(s) that are referencing this product.",
+        //   data: allReviewsByProduct,
+        // });
       }
       await productToDelete.deleteOne();
       return res.sendStatus(200);
@@ -963,7 +987,7 @@ const category_detail_delete = [
         //refuse to delete the category until the products no longer reference it.
         return res.status(400).json({
           error:
-            "Existing products are currently using the category name. You must delete the category name from the following products.",
+            "Existing products are currently using the category name. You must remove the category name from the following products.",
           data: existingProductWithCategory,
         });
       }
@@ -1046,7 +1070,20 @@ const reviews_post = [
   body("rating", "Rating must be a range from 1 to 5.")
     .trim()
     .isInt({ min: 1, max: 5 }),
+  body("reviewer", "Reviewer must be a valid customer id.")
+    .trim()
+    .isMongoId()
+    .custom(async (id) => {
+      const customer = await Customer.findById(id);
+      if (!customer) {
+        throw new Error("Reviewer (customer) id doesn't exist in the db.");
+      }
+      return true;
+    }),
   body("reviewer_name", "The reviewer name cannot be empty.")
+    .trim()
+    .isLength({ min: 1 }),
+  body("review_title", "The review title cannot be blank")
     .trim()
     .isLength({ min: 1 }),
   body("review_description", "The review description cannot be blank")
@@ -1089,7 +1126,9 @@ const reviews_post = [
       }
       const review = new Review({
         rating: req.body.rating,
+        reviewer: req.body.reviewer,
         reviewer_name: req.body.reviewer_name,
+        review_title: req.body.review_title,
         review_description: req.body.review_description,
         review_date: req.body.review_date,
         review_edit_date: req.body.review_edit_date,
@@ -1186,7 +1225,14 @@ const review_detail_get = [
         return next();
       }
 
-      const review = await Review.findById(reviewId).populate("product_id");
+      const review = await Review.findById(reviewId)
+        .populate("product_id")
+        .populate("reviewer", {
+          username: 1,
+          email: 1,
+          first_name: 1,
+          last_name: 1,
+        });
       if (!review) {
         //if id is not active in the db, return 404 status.
         return next();
@@ -1200,9 +1246,24 @@ const review_detail_put = [
     .trim()
     .optional()
     .isInt({ min: 1, max: 5 }),
-  body("reviewer_name", "The reviewer name cannot be empty.")
-    .trim()
+  body("reviewer", "Reviewer must be a valid customer id.")
     .optional()
+    .trim()
+    .isMongoId()
+    .custom(async (id) => {
+      const customer = await Customer.findById(id);
+      if (!customer) {
+        throw new Error("Reviewer (customer) id doesn't exist in the db.");
+      }
+      return true;
+    }),
+  body("reviewer_name", "The reviewer name cannot be empty.")
+    .optional()
+    .trim()
+    .isLength({ min: 1 }),
+  body("review_title", "The review title cannot be blank")
+    .optional()
+    .trim()
     .isLength({ min: 1 }),
   body("review_description", "The review description cannot be blank")
     .trim()
@@ -1259,7 +1320,9 @@ const review_detail_put = [
       const updateReview = await Review.findByIdAndUpdate(reviewId, {
         _id: review._id,
         rating: req.body.rating || review.rating,
+        reviewer: req.body.reviewer || review.reviewer,
         reviewer_name: req.body.reviewer_name || review.reviewer_name,
+        review_title: req.body.review_title || review.review_title,
         review_description:
           req.body.review_description || review.review_description,
         review_date: req.body.review_date || review.review_date,
@@ -1314,7 +1377,7 @@ const customer_list = asyncHandler(
         .filter((field) => !passField.test(field))
         .join(",");
       const LimitedCustomerKeys =
-        "_id,username,email,created_at,first_name,last_name,is_admin,user_code,order_history";
+        "_id,username,email,created_at,first_name,last_name,is_admin,user_code";
       req.query.fields = req.query.fields?.split(",")?.length
         ? req.query.fields
         : LimitedCustomerKeys;
@@ -1368,16 +1431,41 @@ const customer_detail_delete = asyncHandler(
     if (!mongoose.isValidObjectId(customerId)) {
       return next();
     }
-    const customerToBeDeleted = await Customer.findByIdAndDelete(customerId);
+
+    const customerToBeDeleted = await Customer.findById(customerId);
     if (!customerToBeDeleted) {
       return next();
     }
+    //check for dependencies from other db tables & delete those before
+    const reviewsMadeByCustomer = await Review.find({
+      reviewer: customerToBeDeleted.id,
+    });
+    if (reviewsMadeByCustomer) {
+      //delete the reviews ->would be impractical to tell customer to delete each of their reviews;
+      //instead warn the customer before deleting account.
+      for (const reviews of reviewsMadeByCustomer) {
+        await reviews.deleteOne();
+      }
+    }
+    const ordersMadeByCustomer = await OrderHistory.find({
+      customer_id: customerToBeDeleted.id,
+    });
+    if (ordersMadeByCustomer) {
+      //delete the orders ->would be impractical to tell customer to delete each of their order history;
+      //instead warn the customer before deleting account.
+      for (const order of ordersMadeByCustomer) {
+        await order.deleteOne();
+      }
+    }
+    ///////////
+    await customerToBeDeleted.deleteOne();
     return res.sendStatus(200);
   }
 );
 const customer_create = [
   body("username", "Username must be between 3 to 16 characters long.")
     .trim()
+    .toLowerCase()
     .isLength({ min: 3, max: 16 })
     .custom(async (user) => {
       const existingUser = await Customer.findOne({ username: user });
@@ -1392,6 +1480,7 @@ const customer_create = [
     "Email must be in a valid email format. (e.g. name@example.com)"
   )
     .trim()
+    .toLowerCase()
     .isEmail()
     .isLength({ min: 4 })
     .custom(async (email) => {
@@ -1475,55 +1564,6 @@ const customer_create = [
     .trim()
     .optional()
     .isPostalCode("US"),
-  body("order_history", "Order history is in an invalid format.")
-    .optional({ values: "null" })
-    .isObject()
-    .custom((data) => {
-      const keys = Object.keys(data);
-      if (keys.length <= 0) {
-        throw new Error(
-          "Order history must be either null or contain the required key values."
-        );
-      }
-      if (!keys.includes("order_date") || !keys.includes("cart")) {
-        throw new Error(
-          "Order history must contain the order_date and cart sub fields."
-        );
-      }
-      if (keys.length !== 2) {
-        throw new Error("Order history has invalid sub fields.");
-      }
-      return true;
-    }),
-  body(
-    "order_history.order_date",
-    "Order date must be in a ISO8601 date format."
-  )
-    .optional()
-    .isISO8601(),
-  body(
-    "order_history.cart",
-    "Order history cart list must have at least one item."
-  )
-    .optional()
-    .isArray({ min: 1 })
-    .custom((cartData) => {
-      const new_s = z.array(CartItemZodSchema, {
-        message: "Order history cart list must have at least one item.",
-      });
-      const result = new_s.safeParse(cartData);
-      if (result.success) {
-        return true;
-      } else {
-        throw result.error.errors;
-      }
-    }),
-  body("order_history.cart.*._id", "item id is invalid.")
-    .exists({ values: "falsy" })
-    .isMongoId(),
-  body("order_history.cart.*.category.*._id", "category id is invalid.")
-    .exists({ values: "falsy" })
-    .isMongoId(),
 
   asyncHandler(async (req: Request<{}, {}, ICustomer>, res: Response, next) => {
     /** SIGNUP FORM WILL CHECK FOR DUPLICATE EMAILS AND USERNAMES */
@@ -1542,9 +1582,6 @@ const customer_create = [
     if (!req.body.shipping_address) {
       req.body.shipping_address = null;
     }
-    if (!req.body.order_history) {
-      req.body.order_history = null;
-    }
     const hashedPass = await bcrypt.hash(req.body.password, 10);
 
     const customer = new Customer({
@@ -1557,7 +1594,6 @@ const customer_create = [
       is_admin: req.body.is_admin,
       user_code: req.body.user_code,
       shipping_address: req.body.shipping_address,
-      order_history: req.body.order_history,
     });
     await customer.save();
 
@@ -1678,61 +1714,6 @@ const customer_detail_put = [
     .trim()
     .optional()
     .isPostalCode("US"),
-  body(
-    "order_history",
-    "Order history is in an invalid format. Must be an object."
-  )
-    .optional({ values: "null" })
-    .isObject()
-    .custom((data) => {
-      const keys = Object.keys(data);
-      if (keys.length <= 0) {
-        throw new Error(
-          "Order history must be either null or contain the required key fields: [order_date,cart]."
-        );
-      }
-      if (!keys.includes("order_date") || !keys.includes("cart")) {
-        throw new Error(
-          "Order history must contain the order_date and cart sub fields."
-        );
-      }
-      if (keys.length !== 2) {
-        throw new Error("Order history has invalid sub fields.");
-      }
-      return true;
-    }),
-  body(
-    "order_history.order_date",
-    "Order date must be in a ISO8601 date format."
-  )
-    .optional()
-    .isISO8601(),
-  body(
-    "order_history.cart",
-    "Order history cart list must have at least one item."
-  )
-    .optional()
-    .isArray({ min: 1 })
-    .custom((cartData) => {
-      const new_s = z.array(CartItemZodSchema, {
-        message: "Order history cart list must have at least one item.",
-      });
-      const result = new_s.safeParse(cartData);
-      if (result.success) {
-        return true;
-      } else {
-        throw result.error.errors;
-      }
-    }),
-  body("order_history.cart.*._id", "item id is invalid.")
-    .optional()
-    .exists({ values: "falsy" })
-    .isMongoId(),
-  body("order_history.cart.*.category.*._id", "category id is invalid.")
-    .optional()
-    .exists({ values: "falsy" })
-    .isMongoId(),
-
   asyncHandler(
     async (
       req: Request<{ customerId: string }, {}, Partial<ICustomer>>,
@@ -1743,10 +1724,10 @@ const customer_detail_put = [
       if (!mongoose.isValidObjectId(customerId)) {
         return next();
       }
-      if (!req.user?.is_admin) {
-        //filters out people who are not admin (or later -> the currently logged in user)
-        return res.sendStatus(403);
-      }
+      // if (!req.user?.is_admin) {
+      //   //filters out people who are not admin (or later -> the currently logged in user)
+      //   return res.sendStatus(403);
+      // }
       if (Object.keys(req.body).length === 0) {
         return res
           .status(400)
@@ -1778,7 +1759,6 @@ const customer_detail_put = [
       //   user_code: req.body.user_code || customer.user_code,
       //   shipping_address:
       //     req.body.shipping_address || customer.shipping_address,
-      //   order_history: req.body.order_history || customer.order_history,
       // });
       const updateCustomer = await Customer.findByIdAndUpdate(customerId, {
         _id: customer._id,
@@ -1792,7 +1772,6 @@ const customer_detail_put = [
         user_code: req.body.user_code || customer.user_code,
         shipping_address:
           req.body.shipping_address || customer.shipping_address,
-        order_history: req.body.order_history || customer.order_history,
       });
 
       if (!updateCustomer) {
@@ -1804,6 +1783,365 @@ const customer_detail_put = [
     }
   ),
 ];
+
+const orderHistory_list = asyncHandler(async (req: Request, res, next) => {
+  const orderHistoryQuery = new AggregateApi(
+    OrderHistory.aggregate([{ $match: {} }]),
+    req.query
+  );
+
+  // if (req.query.customer) {
+  //   const customerId = req.query.customer;
+  //   if (mongoose.isValidObjectId(customerId)) {
+  //     orderHistoryQuery.aggregation.append({
+  //       $match: { customer_id: new mongoose.Types.ObjectId(customerId) },
+  //     });
+  //   } else {
+  //     //return an empty array
+  //     orderHistoryQuery.aggregation.append({
+  //       $match: {
+  //         unknown_field: "unknown",
+  //       },
+  //     });
+  //   }
+  // }
+
+  orderHistoryQuery.filter().sort("-order_date");
+
+  const paginateClone = new AggregateApi(
+    orderHistoryQuery.aggregation,
+    req.query
+  );
+  const orderHistoryListCount = (await paginateClone.aggregation).length;
+  orderHistoryQuery.paginate();
+  const { pageLimit, pageSkip, pageNum } = orderHistoryQuery.pageInfo();
+  if (req.query.page) {
+    if (pageNum > 1 && pageSkip >= orderHistoryListCount) {
+      return next(); //res 404 - not found
+    }
+  }
+
+  const allOrderHistory = await orderHistoryQuery.aggregation;
+  return res.json({
+    records_count: orderHistoryListCount,
+    total_pages: Math.ceil(orderHistoryListCount / pageLimit),
+    list_count: allOrderHistory.length,
+    order_history: allOrderHistory,
+  });
+});
+const orderHistory_by_customer = asyncHandler(
+  async (req: Request<{ customerId: string }>, res: Response, next) => {
+    const customerId = req.params.customerId;
+    if (!mongoose.isValidObjectId(customerId)) {
+      return next(); //404
+    }
+    const orderHistoryQuery = new AggregateApi(
+      OrderHistory.aggregate([
+        { $match: { customer_id: new mongoose.Types.ObjectId(customerId) } },
+      ]),
+      req.query
+    );
+
+    orderHistoryQuery.filter().sort("order_date");
+    const paginateClone = new AggregateApi(
+      orderHistoryQuery.aggregation,
+      req.query
+    );
+    const orderHistoryListCount = (await paginateClone.aggregation).length;
+    orderHistoryQuery.paginate();
+    const { pageLimit, pageSkip, pageNum } = orderHistoryQuery.pageInfo();
+    if (req.query.page) {
+      if (pageNum > 1 && pageSkip >= orderHistoryListCount) {
+        return next(); //res 404 - not found
+      }
+    }
+
+    const allOrderHistory = await orderHistoryQuery.aggregation;
+    return res.json({
+      records_count: orderHistoryListCount,
+      total_pages: Math.ceil(orderHistoryListCount / pageLimit),
+      list_count: allOrderHistory.length,
+      order_history: allOrderHistory,
+    });
+  }
+);
+
+const orderHistory_detail = asyncHandler(
+  async (req: Request<{ orderId: string }>, res, next) => {
+    const orderId = req.params.orderId;
+    if (!mongoose.isValidObjectId(orderId)) {
+      return next(); //404
+    }
+    const order = await OrderHistory.findById(orderId);
+    if (!order) {
+      return next(); //404
+    }
+    return res.json({ order });
+  }
+);
+const orderHistory_create = [
+  body("order_date", "Order date is not in a ISO8601 date format.")
+    .trim()
+    .default(new Date())
+    .isISO8601(),
+  body("customer_id", "Customer id must be a valid customer id.")
+    .trim()
+    .custom(async (id) => {
+      if (!isValidObjectId(id)) {
+        throw new Error("Customer id is in the wrong format.");
+      }
+      const customer = await Customer.findById(id);
+      if (!customer) {
+        throw new Error("Customer id is not valid.");
+      } else {
+        return true;
+      }
+    }),
+  body("cart_total", "Cart total is required.")
+    .isNumeric()
+    .customSanitizer((v) => Number(v)),
+  body("shipping", "Shipping field must be an object.").isObject(),
+  body("shipping.cost", "Shipping.cost must be defined as a number")
+    .isNumeric()
+    .customSanitizer((v) => Number(v)),
+  body("shipping.code", "Shipping code must be between 1 and 3.")
+    .optional()
+    .isInt({ min: 1, max: 3 })
+    .customSanitizer((v) => Number.parseInt(v)),
+  body("cart", "The cart must be an array list of at least one cart item.")
+    .isArray({ min: 1 })
+    .custom(async (arr: CartItemsType[]) => {
+      // if (v.length === 0) return true;
+      for (const cartItem of arr) {
+        const response = CartItemZodSchema.safeParse(cartItem);
+
+        if (!response.success) {
+          // throw response.error.errors;
+          const errorList = response.error.errors;
+          const errors: string[][] = [];
+          errorList.forEach((e) => {
+            errors.push([e.path.toString(), e.message]);
+          });
+          throw errors;
+        } else {
+          //validate cartitem id, and categories
+          const productId = cartItem._id;
+          const categoryIds = cartItem.category.map((obj) => obj._id);
+          if (!isValidObjectId(productId)) {
+            throw new Error("Cart item's _id field is not a valid product.");
+          }
+          for (const catId of categoryIds) {
+            if (!isValidObjectId(catId)) {
+              throw new Error(
+                `Cart item's category _id field (${catId}) is not a valid category id.`
+              );
+            }
+            const category = await Category.findById(catId);
+            if (!category) {
+              throw new Error(
+                `Cart item's category _id field (${catId}) is not a valid category id.`
+              );
+            }
+          }
+
+          //db queries
+          const product = await Product.findById(productId);
+          if (!product) {
+            throw new Error("Cart item's _id field is not a valid product.");
+          }
+          return true;
+        }
+      }
+    })
+    .customSanitizer((arr: CartItemsType[]) => {
+      // for (const cartItem of arr) {
+      //   const response = CartItemZodSchema.safeParse(cartItem);
+      // }
+      const response = z.array(CartItemZodSchema).safeParse(arr);
+      return response.data;
+    }),
+
+  asyncHandler(
+    async (req: Request<{}, {}, IOrderHistory>, res: Response, next) => {
+      const error = validationResult(req);
+      if (!error.isEmpty()) {
+        return res.status(400).json({ error: error.array() });
+      }
+      const orderHistory = new OrderHistory({
+        customer_id: req.body.customer_id,
+        order_date: req.body.order_date,
+        cart: req.body.cart,
+        shipping: req.body.shipping,
+        cart_total: req.body.cart_total,
+      });
+      await orderHistory.save();
+
+      return res.status(200).json({ orderId: orderHistory.id });
+      // return res.json({ order: orderHistory });
+    }
+  ),
+];
+const orderHistory_detail_put = [
+  body("order_date", "Order date is not in a ISO8601 date format.")
+    .trim()
+    .optional()
+    .default(new Date())
+    .isISO8601(),
+  body("customer_id", "Customer id must be a valid customer id.")
+    .trim()
+    .optional()
+    .custom(async (id) => {
+      if (!isValidObjectId(id)) {
+        throw new Error("Customer id is in the wrong format.");
+      }
+      const customer = await Customer.findById(id);
+      if (!customer) {
+        throw new Error("Customer id is not valid.");
+      } else {
+        return true;
+      }
+    }),
+  body("cart_total", "Cart total is required.")
+    .isNumeric()
+    .customSanitizer((v) => Number(v)),
+  body("shipping", "Shipping field must be an object.").optional().isObject(),
+  body("shipping.cost", "Shipping.cost must be defined as a number")
+    .optional()
+    .isNumeric()
+    .customSanitizer((v) => Number(v)),
+  body("shipping.code", "Shipping code must be between 1 and 3.")
+    .optional()
+    .isInt({ min: 1, max: 3 })
+    .customSanitizer((v) => Number.parseInt(v)),
+  body("cart", "The cart must be an object of one cart item.")
+    .optional()
+    .isObject()
+    .custom(async (v: CartItemsType) => {
+      // if (v.length === 0) return true;
+      const response = CartItemZodSchema.safeParse(v);
+      if (!response.success) {
+        // throw response.error.errors;
+        const errorList = response.error.errors;
+        const errors: string[][] = [];
+        errorList.forEach((e) => {
+          errors.push([e.path.toString(), e.message]);
+        });
+        throw errors;
+      } else {
+        //validate cartitem id, and categories
+        const productId = v._id;
+        const categoryIds = v.category.map((obj) => obj._id);
+        if (!isValidObjectId(productId)) {
+          throw new Error("Cart item's _id field is not a valid product.");
+        }
+        for (const catId of categoryIds) {
+          if (!isValidObjectId(catId)) {
+            throw new Error(
+              `Cart item's category _id field (${catId}) is not a valid category id.`
+            );
+          }
+          const category = await Category.findById(catId);
+          if (!category) {
+            throw new Error(
+              `Cart item's category _id field (${catId}) is not a valid category id.`
+            );
+          }
+        }
+
+        //db queries
+        const product = await Product.findById(productId);
+        if (!product) {
+          throw new Error("Cart item's _id field is not a valid product.");
+        }
+        return true;
+      }
+    })
+    .customSanitizer((val) => {
+      return CartItemZodSchema.safeParse(val).data;
+    }),
+
+  asyncHandler(
+    async (
+      req: Request<{ orderId: string }, {}, Partial<IOrderHistory>>,
+      res: Response,
+      next
+    ) => {
+      const orderId = req.params.orderId;
+      if (!mongoose.isValidObjectId(orderId)) {
+        return next(); //404
+      }
+      if (Object.keys(req.body).length === 0) {
+        return res
+          .status(400)
+          .json({ error: "No data was sent from the payload." });
+      }
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const orderHistory = await OrderHistory.findById(orderId);
+      if (!orderHistory) {
+        return next();
+      }
+      const updateOrder = {
+        _id: orderHistory._id,
+        order_date: req.body.order_date || orderHistory.order_date,
+        customer_id: req.body.customer_id || orderHistory.customer_id,
+        cart: req.body.cart || orderHistory.cart,
+        shipping: {
+          code: req.body?.shipping?.code || orderHistory.shipping.code,
+          cost: req.body?.shipping?.cost || orderHistory.shipping.cost,
+        },
+        cart_total: req.body.cart_total || orderHistory.cart_total,
+      };
+      const updatedOrderHistory = await OrderHistory.findByIdAndUpdate(
+        orderId,
+        {
+          _id: orderHistory._id,
+          order_date: req.body.order_date || orderHistory.order_date,
+          customer_id: req.body.customer_id || orderHistory.customer_id,
+          cart: req.body.cart || orderHistory.cart,
+          cart_total: req.body.cart_total || orderHistory.cart_total,
+          shipping: {
+            code: req.body?.shipping?.code || orderHistory.shipping.code,
+            cost: req.body?.shipping?.cost || orderHistory.shipping.cost,
+          },
+        }
+      );
+
+      if (!updatedOrderHistory) {
+        return res.status(400).json({
+          error: `Error! Product: ${orderId} could not be updated.`,
+        });
+      }
+
+      return res.sendStatus(200);
+      // return res.json({ updateOrder: updateOrder });
+    }
+  ),
+];
+const orderHistory_detail_delete = asyncHandler(
+  async (req: Request<{ orderId: string }>, res: Response, next) => {
+    const orderId = req.params.orderId;
+    if (!mongoose.isValidObjectId(orderId)) {
+      return next(); //404
+    }
+    const order = await OrderHistory.findByIdAndDelete(orderId);
+    if (!order) {
+      return next(); //404
+    }
+
+    return res.sendStatus(200);
+  }
+);
+const overwrite = asyncHandler(async (req, res, next) => {
+  const response = null;
+  // const response = await Customer.updateMany(
+  //   {},
+  //   { $unset: { order_history: "" } }
+  // );
+  return res.json({ data: response ?? "nothing to respond." });
+});
 
 export {
   test_get,
@@ -1829,4 +2167,11 @@ export {
   customer_detail,
   customer_detail_delete,
   customer_detail_put,
+  orderHistory_list,
+  orderHistory_by_customer,
+  orderHistory_create,
+  orderHistory_detail,
+  orderHistory_detail_put,
+  orderHistory_detail_delete,
+  overwrite,
 };

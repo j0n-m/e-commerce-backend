@@ -4,7 +4,9 @@ const Schema = mongoose.Schema;
 
 interface IReview {
   rating: 1 | 2 | 3 | 4 | 5;
+  reviewer: Types.ObjectId;
   reviewer_name: string;
+  review_title: string;
   review_description: string;
   review_date: Date;
   review_edit_date?: Date;
@@ -18,7 +20,16 @@ const reviewSchema = new Schema<IReview>({
     enum: [1, 2, 3, 4, 5],
     required: true,
   },
+  reviewer: {
+    type: Schema.ObjectId,
+    ref: "Customer",
+  },
   reviewer_name: {
+    type: String,
+    required: true,
+    minlength: 1,
+  },
+  review_title: {
     type: String,
     required: true,
     minlength: 1,

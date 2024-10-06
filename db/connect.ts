@@ -1,18 +1,19 @@
 import mongoose from "mongoose";
 import getDbCredentials from "./config";
-import { initController } from "./initialize";
 import "dotenv/config";
+import { Express } from "express";
 
-async function connectToDB() {
+async function connectToDB(app: Express, port: number) {
   const db = getDbCredentials();
 
   if (!db) return;
 
   try {
     await mongoose.connect(db);
-    // debugger;
-    //Temporarily add items to db
-    // initController();
+
+    app.listen(port, () => {
+      console.log(`Server is listening on port: ${port}`);
+    });
   } catch (error) {
     console.error(error);
   }

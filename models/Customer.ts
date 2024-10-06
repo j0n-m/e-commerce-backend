@@ -70,7 +70,7 @@ export const CartItemZodSchema = z.object({
           .min(2),
       })
     )
-    .length(1, "Order history category cart must have at least one object."),
+    .min(1, "Cart item's category must have at least one category object."),
   image_src: z.string().optional(),
   discount: z.number().optional(),
 });
@@ -79,10 +79,10 @@ export type CartItemsType = z.infer<typeof CartItemZodSchema>;
 
 type AddressOption = z.infer<typeof addressSchema>;
 
-interface OrderHistory {
-  order_date: Date;
-  cart: Array<CartItemsType>;
-}
+// interface OrderHistory {
+//   order_date: Date;
+//   cart: Array<CartItemsType>;
+// }
 
 export interface ICustomer {
   username: string;
@@ -94,7 +94,6 @@ export interface ICustomer {
   user_code: 1 | 2 | 3 | 4;
   last_name: string;
   shipping_address: AddressOption | null;
-  order_history: OrderHistory | null;
 }
 const customerSchema = new Schema<ICustomer>({
   username: {
@@ -102,16 +101,21 @@ const customerSchema = new Schema<ICustomer>({
     required: true,
     minlength: 3,
     maxlength: 16,
+    lowercase: true,
+    unique: true,
   },
   email: {
     type: String,
     required: true,
     minlength: 4,
+    lowercase: true,
+    unique: true,
   },
   password: {
     type: String,
     required: true,
     minlength: 5,
+    lowercase: true,
   },
   created_at: {
     type: Date,
@@ -121,11 +125,13 @@ const customerSchema = new Schema<ICustomer>({
     type: String,
     required: true,
     minlength: 2,
+    lowercase: true,
   },
   last_name: {
     type: String,
     required: true,
     minlength: 1,
+    lowercase: true,
   },
   is_admin: {
     type: Boolean,
@@ -171,37 +177,6 @@ const customerSchema = new Schema<ICustomer>({
         enum: ["US", "CA"],
       },
     },
-  },
-  order_history: {
-    order_date: {
-      type: Date,
-    },
-    cart: [
-      {
-        _id: {
-          type: String,
-          minlength: 2,
-        },
-        name: {
-          type: String,
-          minlength: 2,
-        },
-        brand: String,
-        price: Number,
-        retail_price: Number,
-        quantity: Number,
-        cart_quantity: Number,
-        category: [
-          {
-            alias: String,
-            _id: String,
-            name: String,
-          },
-        ],
-        image_src: String,
-        discount: Number,
-      },
-    ],
   },
 });
 

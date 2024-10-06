@@ -3,6 +3,8 @@ import "dotenv/config";
 import Stripe from "stripe";
 import mongoose from "mongoose";
 import Product from "../models/Product";
+import { CartItemsType, CartItemZodSchema } from "../models/Customer";
+import { z } from "zod";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET || "");
 
@@ -25,7 +27,7 @@ const getShippingFromCode = (shippingCode: number) => {
       );
   }
 };
-async function calculateItemAmount(cart: any[]): Promise<number> {
+async function calculateItemAmount(cart: CartItemsType[]): Promise<number> {
   const productQuery = cart.map((item) => ({
     _id: new mongoose.Types.ObjectId(item._id),
   }));
@@ -40,7 +42,7 @@ async function calculateItemAmount(cart: any[]): Promise<number> {
   const totalPrice = products.reduce((prev, curr) => {
     const cartItem = cart.find((p) => p._id.toString() === curr._id.toString());
 
-    const productTotal = cartItem.cart_quantity * curr.price;
+    const productTotal = cartItem!.cart_quantity * curr.price;
     return prev + productTotal;
   }, 0);
   const fixedPrice = Number(totalPrice.toFixed(2));
@@ -65,19 +67,38 @@ const stripe_get_customer = async (
 };
 
 const stripe_update_intent = async (
-  req: Request,
+  req: Request<
+    { intentId: string },
+    {},
+    { shippingCode: number; cart: CartItemsType[] }
+  >,
   res: Response,
   next: NextFunction
 ) => {
+  req.body.shippingCode = +req.body.shippingCode;
   try {
     if (req.params.intentId === "undefined") {
-      return res.sendStatus(400);
+      return res.status(400).json({ error: "Provide the payment intent id." });
     }
     if (!req.body.cart) {
-      return res.sendStatus(400);
+      return res
+        .status(400)
+        .json({ error: "Provide the shopping cart in the payload." });
     }
-    if (!req.body.shippingCode) {
-      return res.sendStatus(400);
+    if (
+      !req.body.shippingCode ||
+      req.body.shippingCode < 0 ||
+      req.body.shippingCode > 3
+    ) {
+      return res
+        .status(400)
+        .json({ error: "Provide a valid shipping code in the payload." });
+    }
+    const schemaRes = z.array(CartItemZodSchema).safeParse(req.body.cart);
+    // console.log(req.body.cart);
+    if (!schemaRes.success) {
+      // console.log(schemaRes.error);
+      return res.status(400).json({ error: schemaRes.error });
     }
     // console.log(req.body);
 
@@ -86,17 +107,28 @@ const stripe_update_intent = async (
     const itemAmountInCents =
       Math.round(100 * newCostInDollars) + shippingCostInCents;
 
-    const response = await stripe.paymentIntents.update(req.params.intentId, {
-      amount: itemAmountInCents,
-    });
-    const itemAmountInDollars = Number((response.amount / 100).toFixed(2));
+    const itemAmountInDollars = Number((itemAmountInCents / 100).toFixed(2));
     const shippingCostInDollars = Number(
       (shippingCostInCents / 100).toFixed(2)
     );
 
+    const response = await stripe.paymentIntents.update(req.params.intentId, {
+      amount: itemAmountInCents,
+      metadata: {
+        total: itemAmountInDollars,
+        shipping_code: req.body.shippingCode,
+        shipping: shippingCostInDollars,
+        cartTotal: newCostInDollars,
+      },
+    });
+    if (!response) {
+      return res.status(400).json({ error: "Failed to update payment info." });
+    }
+
     return res.json({
       amount: {
         total: itemAmountInDollars,
+        shipping_code: req.body.shippingCode,
         shipping: shippingCostInDollars,
         cartTotal: newCostInDollars,
       },
@@ -105,7 +137,26 @@ const stripe_update_intent = async (
     console.log(error);
   }
 };
+const retrieve_pay_info = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
+  const paymentIntentId = req.body.payIntent;
+  if (!paymentIntentId) {
+    return next();
+  }
+  try {
+    const response = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (!response) {
+      return res.status(400).json({ error: "Payment id doesn't exist." });
+    }
 
+    return res.json({ data: response.metadata });
+  } catch (error) {
+    return next(error);
+  }
+};
 const stripe_create_intent = async (
   req: Request,
   res: Response,
@@ -147,6 +198,7 @@ const stripe_create_intent = async (
       automatic_payment_methods: {
         enabled: true,
       },
+      metadata: {},
       customer: "cus_QszC7xA9EHyBL9",
       setup_future_usage: "on_session",
       payment_method_options: {
@@ -183,4 +235,9 @@ const stripe_create_intent = async (
   }
 };
 
-export { stripe_create_intent, stripe_get_customer, stripe_update_intent };
+export {
+  stripe_create_intent,
+  stripe_get_customer,
+  stripe_update_intent,
+  retrieve_pay_info,
+};

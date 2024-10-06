@@ -11,6 +11,7 @@ router.get("/test", controller.test_get);
 router.post("/create-payment-intent", payment.stripe_create_intent);
 router.get("/get-cus", payment.stripe_get_customer);
 router.post("/update-intent/:intentId", payment.stripe_update_intent);
+router.post("/payment/info", payment.retrieve_pay_info);
 
 //all products
 router.get("/products", controller.products_get);
@@ -47,20 +48,23 @@ router.delete("/review/:reviewId", controller.review_detail_delete);
 router.get("/customers", controller.customer_list);
 router.post("/customers", controller.customer_create);
 
-router.get("/customer/:customerId", verify_Auth, controller.customer_detail);
-router.put(
-  "/customer/:customerId",
-  verify_Auth,
-  controller.customer_detail_put
+router.get("/customer/:customerId", controller.customer_detail);
+router.put("/customer/:customerId", controller.customer_detail_put);
+router.delete("/customer/:customerId", controller.customer_detail_delete);
+
+router.get("/orderhistory", controller.orderHistory_list);
+router.get(
+  "/orderhistory/customer/:customerId",
+  controller.orderHistory_by_customer
 );
-router.delete(
-  "/customer/:customerId",
-  verify_Auth,
-  controller.customer_detail_delete
-);
+router.post("/orderhistory", controller.orderHistory_create);
+router.get("/orderhistory/:orderId", controller.orderHistory_detail);
+router.put("/orderhistory/:orderId", controller.orderHistory_detail_put);
+router.delete("/orderhistory/:orderId", controller.orderHistory_detail_delete);
 
 // router.use((req, res, next) => {
 //   // return res.sendStatus(404);
 //   return next();
 // });
+router.post("/overwrite", controller.overwrite);
 export default router;

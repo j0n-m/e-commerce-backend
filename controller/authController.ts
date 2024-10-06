@@ -131,12 +131,11 @@ const login = [
         first_name: user.first_name,
         last_name: user.last_name,
         shipping_address: user.shipping_address,
-        order_history: user.order_history,
       };
 
       //create token:
       const token = jwt.sign(userPayload, process.env.JWT_SECRET || "", {
-        expiresIn: "10m",
+        expiresIn: "15m",
       });
       const ENVIRONMENT = process.env?.NODE_ENV;
       console.log(ENVIRONMENT);
@@ -147,7 +146,8 @@ const login = [
         res.cookie("token", token, {
           httpOnly: true,
           // maxAge = how long the cookie is valid for in milliseconds
-          maxAge: 1000 * 60 * 10, // 10min,
+          // maxAge: 1000 * 60 * 10, // 10min,
+          maxAge: 1000 * 60 * 15, // 15m,
         });
       } else {
         res.cookie("token", token, {

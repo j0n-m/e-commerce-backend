@@ -3,28 +3,10 @@ import apiRouter from "./routes/apiRoutes";
 import authRouter from "./routes/authRoutes";
 import morgan from "morgan";
 import "dotenv/config";
-import mongoose from "mongoose";
-import { connectToDB } from "./db/connect";
 import cors = require("cors");
 import cookieParser = require("cookie-parser");
 
 const app = express();
-
-const PORT = Number(process.env.PORT) ?? 3000;
-
-//event listeners
-mongoose.connection.on("connected", () => {
-  console.log("Successfully connected to the DB.");
-});
-mongoose.connection.on("disconnected", () => {
-  console.error("Disconnected from the DB.");
-});
-mongoose.connection.on("error", () => {
-  console.error("Error connecting to the DB.");
-});
-mongoose.set("strictQuery", false);
-//connection to the DB
-connectToDB();
 
 //corsOptions.origin to allow all domains to access the apis
 
@@ -67,6 +49,8 @@ app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
   return res.status(500).json({ error: error.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is listening on port: ${PORT}`);
-});
+// app.listen(PORT, () => {
+//   console.log(`Server is listening on port: ${PORT}`);
+// });
+
+export default app;
