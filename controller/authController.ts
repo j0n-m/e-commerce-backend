@@ -3,16 +3,21 @@ import { validationResult, body, query, param } from "express-validator";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import "dotenv/config";
-import Customer, { ICustomer } from "../models/Customer";
+import Customer, { CartItemsType, ICustomer } from "../models/Customer";
 import mongoose, { Document, Types } from "mongoose";
 import Review from "../models/Review";
+import Stripe from "stripe";
+import Product from "../models/Product";
+import OrderHistory from "../models/OrderHistory";
+const stripe = new Stripe(process.env.STRIPE_SECRET || "");
 
 export type PermitModels =
   | "Orders"
   | "Reviews"
   | "Customers"
   | "Categories"
-  | "Products";
+  | "Products"
+  | "Orders-GET";
 //MIDDLEWARE TO VERIFY IF USER IS AUTHENTICATED
 //First priority middleware that kicks any unauthorized users
 const verify_Auth = (req: Request, res: Response, next: NextFunction) => {
@@ -181,19 +186,19 @@ const permitAdminOnly = (req: Request, res: Response, next: NextFunction) => {
   if (req?.user?.is_admin) {
     return next();
   }
-  return res.status(403).json("message: You are unauthorized.");
+  return res.status(403).json({ message: "You are unauthorized." });
 };
 const permitUser = (model: PermitModels) => {
   //For http verbs: GET(details),PUT,DELETE
   //Allows admin users or authenticated user who owns the resource to continue to next endpoint;
   //returns 403 if user doesn't own the accessible resource;
   return async (
-    req: Request<{ reviewId: string; customerId: string }>,
+    req: Request<{ reviewId: string; customerId: string; orderId: string }>,
     res: Response,
     next: NextFunction
   ) => {
     const userId = req?.user?.id;
-    console.log(userId);
+
     if (req.user.is_admin) {
       return next();
     }
@@ -201,33 +206,68 @@ const permitUser = (model: PermitModels) => {
       case "Reviews": {
         // :reviewId [DELETE OR PUT]
         //check if its the user's own resource
-        const userReview = await Review.findById(req.params.reviewId);
-        if (!userReview) {
-          return res.sendStatus(404);
-        }
+        try {
+          const userReview = await Review.findById(req.params.reviewId);
+          if (!userReview) {
+            return res.sendStatus(404);
+          }
 
-        if (userReview.reviewer.toString() === userId) {
-          return next();
-        } else {
-          return res
-            .status(403)
-            .json({ message: "You are unauthorized to access this resource." });
+          if (userReview.reviewer.toString() === userId) {
+            return next();
+          } else {
+            return res.status(403).json({
+              message: "You are unauthorized to access this resource.",
+            });
+          }
+        } catch (error) {
+          return res.sendStatus(404);
         }
       }
       case "Customers": {
-        // :customerId
-        //check if its the user's own resource
-        const customer = await Customer.findById(req.params.customerId);
-        if (!customer) {
+        try {
+          // :customerId
+          //check if its the user's own resource
+          const customer = await Customer.findById(req.params.customerId);
+          if (!customer) {
+            return res.sendStatus(404);
+          }
+
+          if (customer.id === userId) {
+            return next();
+          } else {
+            return res.status(403).json({
+              message: "You are unauthorized to access this resource.",
+            });
+          }
+        } catch (error) {
           return res.sendStatus(404);
         }
-
-        if (customer.id === userId) {
+      }
+      case "Orders": {
+        ///orderhistory/customer/:customerId -> GET
+        if (userId === req.params.customerId) {
           return next();
-        } else {
-          return res
-            .status(403)
-            .json({ message: "You are unauthorized to access this resource." });
+        }
+        return res
+          .status(403)
+          .json({ message: "You are unauthorized to access this resource." });
+      }
+      case "Orders-GET": {
+        //---/orderhistory/:orderId"
+        const orderId = req.params.orderId;
+        try {
+          const order = await OrderHistory.findById(orderId);
+          if (!order) {
+            return res.status(404);
+          }
+          if (order.customer_id.toString() !== req.user.id) {
+            return res.status(403).json({
+              message: "You are unauthorized to access this resource.",
+            });
+          }
+          return next();
+        } catch (error) {
+          return res.sendStatus(404);
         }
       }
       default: {
@@ -238,11 +278,131 @@ const permitUser = (model: PermitModels) => {
     }
   };
 };
-const permitUserPost = () => {
+const permitUserPost = (model: PermitModels) => {
   //For http verb: POST
   //POST logic is different from permitUsers logic
   //Allows admin users or authenticated user who owns the resource to continue to next endpoint;
   //returns 403 if user doesn't own the accessible resource;
+  return async (
+    req: Request<
+      {},
+      {},
+      {
+        paymentIntentId: string;
+        customerId: string;
+        cart: CartItemsType[];
+        reviewer: string;
+        product_id: string;
+      }
+    >,
+    res: Response,
+    next: NextFunction
+  ) => {
+    switch (model) {
+      case "Orders": {
+        try {
+          const paymentIntentId = req.body.paymentIntentId;
+          const reqCart = req.body.cart;
+          if (!paymentIntentId) {
+            return res
+              .status(400)
+              .json({ message: "Missing fields in payload." });
+          }
+          const customerId = req.body.customerId;
+          const customer = await Customer.findById(customerId);
+          if (!customer) {
+            return res
+              .status(400)
+              .json({ message: "Invalid customer id field in payload." });
+          }
+          if (reqCart.length <= 0) {
+            return res
+              .status(400)
+              .json({ message: "Invalid cart field in payload." });
+          }
+          //Get payment info
+          const response = await stripe.paymentIntents.retrieve(
+            paymentIntentId
+          );
+          if (!response) {
+            return res.status(400).json({ error: "Payment id doesn't exist." });
+          }
+          //verify cart items with payment info metadata
+          const cartProductIds =
+            response.metadata.cartProductIdsAsStr.split(",");
+          const reqCartProductIds = reqCart.map((item) => item._id);
+          const isCartValid = reqCartProductIds.every(
+            (productId) =>
+              cartProductIds.includes(productId) &&
+              cartProductIds.length === reqCartProductIds.length
+          );
+          if (!isCartValid) {
+            return res
+              .status(400)
+              .json({ message: "Invalid. Cart items do not match." });
+          }
+
+          const paymentCreated = response.created; //converting from unix epoch timestamp
+          const paymentCreatedThreshold = paymentCreated + 10;
+          const now = new Date().valueOf();
+          if (now < paymentCreatedThreshold) {
+            return res.status(403).json({ message: "Too early to re-order" });
+          }
+          const orderPayload = {
+            order_date: new Date(),
+            customer_id: customerId,
+            cart_total: response.metadata.cartTotal,
+            shipping: {
+              code: response.metadata.shipping_code,
+              cost: response.metadata.shipping,
+            },
+            cart: reqCart,
+          };
+          req.body = { ...req.body, ...orderPayload };
+          return next();
+        } catch (error) {
+          return res.status(500).json({
+            message: "An error occured while validating order history.",
+          });
+        }
+      }
+      case "Reviews": {
+        // --/api/reviews
+        const reviewer = req.body.reviewer;
+        const productId = req.body.product_id;
+
+        try {
+          //verify if its users own review
+          if (reviewer !== req.user.id) {
+            return res.status(403).json({
+              message: "You are unauthorized to access this resource.",
+            });
+          }
+
+          //verify if product is in orderhistory (purchased)
+          const orders = await OrderHistory.find({
+            customer_id: new mongoose.Types.ObjectId(reviewer),
+            "cart._id": productId,
+          });
+          if (orders.length <= 0) {
+            return res.status(400).json({
+              message:
+                "Customer cannot write a review because they didn't purchase this product.",
+            });
+          }
+
+          return next();
+        } catch (error) {
+          return res.status(400).json({ message: "Invalid payload data." });
+        }
+      }
+      default: {
+        return res
+          .status(403)
+          .json({ message: "Unknown model name. Restricted access." });
+      }
+    }
+  };
 };
 
 export {
@@ -254,4 +414,5 @@ export {
   isUserAuthenticated,
   permitAdminOnly,
   permitUser,
+  permitUserPost,
 };

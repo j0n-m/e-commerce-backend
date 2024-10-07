@@ -1124,6 +1124,21 @@ const reviews_post = [
       if (!error.isEmpty()) {
         return res.status(400).json({ error: error.array() });
       }
+      //verify dupe product reviews
+      const previousReviews = await Review.findOne({
+        reviewer: new mongoose.Types.ObjectId(req.body.reviewer),
+        product_id: new mongoose.Types.ObjectId(req.body.product_id),
+      });
+      if (previousReviews) {
+        return res.status(400).json({
+          message:
+            "Customer cannot write more than one review for this product.",
+        });
+      }
+      if (!req.user.is_admin) {
+        req.body.review_date = new Date();
+      }
+
       const review = new Review({
         rating: req.body.rating,
         reviewer: req.body.reviewer,
@@ -1131,7 +1146,7 @@ const reviews_post = [
         review_title: req.body.review_title,
         review_description: req.body.review_description,
         review_date: req.body.review_date,
-        review_edit_date: req.body.review_edit_date,
+        review_edit_date: undefined,
         product_id: req.body.product_id,
       });
       await review.save();
@@ -1278,7 +1293,7 @@ const review_detail_put = [
     "Review edit date must be in the ISO8601 time format."
   )
     .trim()
-    .default(new Date())
+    .optional()
     .isISO8601(),
   body("product_id", "Product id must be a valid id.")
     .trim()
@@ -1316,19 +1331,34 @@ const review_detail_put = [
           });
         }
       }
-
-      const updateReview = await Review.findByIdAndUpdate(reviewId, {
-        _id: review._id,
-        rating: req.body.rating || review.rating,
-        reviewer: req.body.reviewer || review.reviewer,
-        reviewer_name: req.body.reviewer_name || review.reviewer_name,
-        review_title: req.body.review_title || review.review_title,
-        review_description:
-          req.body.review_description || review.review_description,
-        review_date: req.body.review_date || review.review_date,
-        review_edit_date: req.body.review_edit_date,
-        product_id: req.body.product_id || review.product_id,
-      });
+      let updateReview = null;
+      if (req?.user.is_admin) {
+        updateReview = await Review.findByIdAndUpdate(reviewId, {
+          _id: review._id,
+          rating: req.body.rating || review.rating,
+          reviewer: req.body.reviewer || review.reviewer,
+          reviewer_name: req.body.reviewer_name || review.reviewer_name,
+          review_title: req.body.review_title || review.review_title,
+          review_description:
+            req.body.review_description || review.review_description,
+          review_date: req.body.review_date || review.review_date,
+          review_edit_date: req.body.review_edit_date,
+          product_id: req.body.product_id || review.product_id,
+        });
+      } else {
+        updateReview = await Review.findByIdAndUpdate(reviewId, {
+          _id: review._id,
+          rating: req.body.rating || review.rating,
+          reviewer: review.reviewer,
+          reviewer_name: req.body.reviewer_name || review.reviewer_name,
+          review_title: req.body.review_title || review.review_title,
+          review_description:
+            req.body.review_description || review.review_description,
+          review_date: review.review_date,
+          review_edit_date: new Date(),
+          product_id: review.product_id,
+        });
+      }
       if (!updateReview) {
         return res
           .status(400)
@@ -1415,14 +1445,13 @@ const customer_detail = asyncHandler(
     if (!customer) {
       return next();
     }
-    if (!req.user?.is_admin) {
-      //non admin users see limted keys values of other customers
-      const { password, shipping_address, ...limitedCustomerObj } =
-        customer.toJSON();
-      return res.json({ customer: limitedCustomerObj });
-    } else {
+
+    if (req.user.is_admin) {
       return res.json({ customer });
     }
+    const { password, shipping_address, ...limitedCustomer } =
+      customer.toJSON();
+    return res.json({ customer: limitedCustomer });
   }
 );
 const customer_detail_delete = asyncHandler(
@@ -1577,14 +1606,16 @@ const customer_create = [
         single_error: { [oneError.path]: oneError.msg },
       });
     }
-    if (!req.body.created_at) {
-      req.body.created_at = new Date();
-    }
     if (!req.body.shipping_address) {
       req.body.shipping_address = null;
     }
 
     const hashedPass = await bcrypt.hash(req.body.password, 10);
+    if (!req.user.is_admin) {
+      (req.body.is_admin = false),
+        (req.body.user_code = 1),
+        (req.body.created_at = new Date());
+    }
 
     const customer = new Customer({
       username: req.body.username,
@@ -1600,9 +1631,7 @@ const customer_create = [
     await customer.save();
 
     //create Customer object will fields filled in and save()
-    return res.json({
-      "saved customer": customer,
-    });
+    return res.sendStatus(200);
   }),
 ];
 
@@ -1750,20 +1779,25 @@ const customer_detail_put = [
       const hashedPass = req.body.password
         ? await bcrypt.hash(req.body.password, 10)
         : null;
+      //if a user is updating their profile, prevent overwritting certain fields unless they are admin
+      if (!req.user.is_admin) {
+        if (req.body.is_admin) {
+          req.body.is_admin = customer.is_admin;
+        }
+        if (req.body.user_code) {
+          req.body.user_code = customer.user_code;
+        }
+        if (req.body.created_at) {
+          req.body.created_at = customer.created_at;
+        }
+        if (req.body.email) {
+          req.body.email = customer.email;
+        }
+        if (req.body.username) {
+          req.body.username = customer.username;
+        }
+      }
 
-      // const testEdit = new Customer({
-      //   _id: customer._id,
-      //   username: req.body.username || customer.username,
-      //   email: req.body.email || customer.email,
-      //   password: hashedPass || customer.password,
-      //   created_at: req.body.created_at || customer.created_at,
-      //   first_name: req.body.first_name || customer.first_name,
-      //   last_name: req.body.last_name || customer.last_name,
-      //   is_admin: req.body.is_admin || customer.is_admin,
-      //   user_code: req.body.user_code || customer.user_code,
-      //   shipping_address:
-      //     req.body.shipping_address || customer.shipping_address,
-      // });
       const updateCustomer = await Customer.findByIdAndUpdate(customerId, {
         _id: customer._id,
         username: req.body.username || customer.username,

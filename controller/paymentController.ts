@@ -111,6 +111,15 @@ const stripe_update_intent = async (
     const shippingCostInDollars = Number(
       (shippingCostInCents / 100).toFixed(2)
     );
+    const cartIdsAsStr = schemaRes.data.map((d) => d._id).join(",");
+
+    // type PaymentIntentMetadata = {
+    //   total:number,
+    //   shipping_code:number|string,
+    //   shipping:number,
+    //   cartTotal:number,
+    //   cartProductIdsAsStr:string
+    // }
 
     const response = await stripe.paymentIntents.update(req.params.intentId, {
       amount: itemAmountInCents,
@@ -119,6 +128,7 @@ const stripe_update_intent = async (
         shipping_code: req.body.shippingCode,
         shipping: shippingCostInDollars,
         cartTotal: newCostInDollars,
+        cartProductIdsAsStr: cartIdsAsStr,
       },
     });
     if (!response) {
@@ -138,7 +148,7 @@ const stripe_update_intent = async (
   }
 };
 const retrieve_pay_info = async (
-  req: Request,
+  req: Request<{}, {}, { payIntent: string }>,
   res: Response,
   next: NextFunction
 ) => {
@@ -154,7 +164,7 @@ const retrieve_pay_info = async (
 
     return res.json({ data: response.metadata });
   } catch (error) {
-    return next(error);
+    return res.status(400).json({ message: error });
   }
 };
 const stripe_create_intent = async (
@@ -227,7 +237,7 @@ const stripe_create_intent = async (
       paymentIntentId: paymentIntent.id,
       clientSecret: paymentIntent.client_secret,
       customer_session_client_secret: customerSession.client_secret,
-      customer: { address: customer.address, name: customer.name } || null,
+      customer: { address: customer.address, name: customer.name },
       payAmount: paymentIntent.amount / 100,
     });
   } catch (error) {

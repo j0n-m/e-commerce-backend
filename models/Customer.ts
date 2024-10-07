@@ -38,6 +38,8 @@ export const ShippingAddress = z.object({
   country: COUNTRY_VALUES,
 });
 
+export type IShippingAddress = z.infer<typeof ShippingAddress>;
+
 export const addressSchema = z.object({
   name: z.string(),
   phone: z.string().optional(),
