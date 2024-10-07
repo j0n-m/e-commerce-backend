@@ -3,6 +3,7 @@ import Category from "../models/Category";
 import Product from "../models/Product";
 import Customer from "../models/Customer";
 import OrderHistory, { IOrderHistory } from "../models/OrderHistory";
+import bcrypt from "bcrypt";
 
 export const categoryIds: string[] = [];
 export const productIds: string[] = [];
@@ -63,10 +64,13 @@ async function createProducts() {
 }
 
 async function createCustomer() {
+  const hasheduserpass = await bcrypt.hash("testpass", 10);
+  const hashedadminpass = await bcrypt.hash("testadmin", 10);
+
   const customer = new Customer({
     username: "Pbody",
-    email: "1234@1234.com",
-    password: "unhashedpass",
+    email: "testuser@mail.com",
+    password: hasheduserpass,
     created_at: "2024-09-29T03:33:20.715Z",
     first_name: "testname",
     last_name: "Sherman",
@@ -75,8 +79,22 @@ async function createCustomer() {
     shipping_address: null,
     order_history: null,
   });
+  const customerAdmin = new Customer({
+    username: "adminaccnt",
+    email: "testadmin@mail.com",
+    password: hashedadminpass,
+    created_at: "2024-09-29T03:33:20.715Z",
+    first_name: "testadmin",
+    last_name: "test",
+    is_admin: true,
+    user_code: 1,
+    shipping_address: null,
+    order_history: null,
+  });
   const newCustomer = await customer.save();
+  const adminCustomer = await customerAdmin.save();
   customerIds.push(newCustomer.id);
+  customerIds.push(adminCustomer.id);
 }
 async function createOrderHistory() {
   const order = new OrderHistory<IOrderHistory>({

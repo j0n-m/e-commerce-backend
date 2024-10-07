@@ -4,23 +4,15 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
 import "dotenv/config";
 import Customer, { ICustomer } from "../models/Customer";
-import { Document, Types } from "mongoose";
+import mongoose, { Document, Types } from "mongoose";
+import Review from "../models/Review";
 
-//mock user from db
-// const userTest = {
-//   _id: "testid",
-//   username: "jon",
-//   email: "jon@mail.com",
-//   password: "testing",
-//   createdAt: new Date(),
-//   firstName: "Jon",
-//   lastName: "Mon",
-//   shipping_address: {
-//     field: "any address",
-//   },
-//   past_orders: [{ cartItems: "cart items", order_created: "some date" }],
-// };
-
+export type PermitModels =
+  | "Orders"
+  | "Reviews"
+  | "Customers"
+  | "Categories"
+  | "Products";
 //MIDDLEWARE TO VERIFY IF USER IS AUTHENTICATED
 //First priority middleware that kicks any unauthorized users
 const verify_Auth = (req: Request, res: Response, next: NextFunction) => {
@@ -137,7 +129,7 @@ const login = async (
       expiresIn: "15m",
     });
     const ENVIRONMENT = process.env?.NODE_ENV;
-    console.log(ENVIRONMENT);
+    // console.log(ENVIRONMENT);
 
     // run code conditionally
     if (ENVIRONMENT === "development") {
@@ -177,34 +169,74 @@ const logout = [
     }
   },
 ];
-// /signup will be a frontend path that pings the backend's customer post api
-const signup = (req: Request, res: Response, next: NextFunction) => {
-  return res.json({ data: "signup test" });
+
+const auth_route_test = (req: Request, res: Response, next: NextFunction) => {
+  return res.sendStatus(200);
 };
-
-const auth_route_test = [
-  (req: Request, res: Response, next: NextFunction) => {
-    return res.sendStatus(200);
-    // console.log("test");
-    // return res.status(200).json({ message: "You are an authorized user." });
-  },
-];
-
 //middleware for protected api endpoints
 //To be used in conjunction with verify_Auth middleware
 const permitAdminOnly = (req: Request, res: Response, next: NextFunction) => {
   //Only allows admin users to continue to next endpoint;
   //returns next() if is admin or 403 if not;
-
-  if (req?.user?.isAdmin) {
+  if (req?.user?.is_admin) {
     return next();
   }
   return res.status(403).json("message: You are unauthorized.");
 };
-const permitUser = () => {
-  //For http verbs: GET,PUT,DELETE
+const permitUser = (model: PermitModels) => {
+  //For http verbs: GET(details),PUT,DELETE
   //Allows admin users or authenticated user who owns the resource to continue to next endpoint;
   //returns 403 if user doesn't own the accessible resource;
+  return async (
+    req: Request<{ reviewId: string; customerId: string }>,
+    res: Response,
+    next: NextFunction
+  ) => {
+    const userId = req?.user?.id;
+    console.log(userId);
+    if (req.user.is_admin) {
+      return next();
+    }
+    switch (model) {
+      case "Reviews": {
+        // :reviewId [DELETE OR PUT]
+        //check if its the user's own resource
+        const userReview = await Review.findById(req.params.reviewId);
+        if (!userReview) {
+          return res.sendStatus(404);
+        }
+
+        if (userReview.reviewer.toString() === userId) {
+          return next();
+        } else {
+          return res
+            .status(403)
+            .json({ message: "You are unauthorized to access this resource." });
+        }
+      }
+      case "Customers": {
+        // :customerId
+        //check if its the user's own resource
+        const customer = await Customer.findById(req.params.customerId);
+        if (!customer) {
+          return res.sendStatus(404);
+        }
+
+        if (customer.id === userId) {
+          return next();
+        } else {
+          return res
+            .status(403)
+            .json({ message: "You are unauthorized to access this resource." });
+        }
+      }
+      default: {
+        return res
+          .status(403)
+          .json({ message: "Unknown model name. Restricted access." });
+      }
+    }
+  };
 };
 const permitUserPost = () => {
   //For http verb: POST
@@ -216,10 +248,10 @@ const permitUserPost = () => {
 export {
   login,
   logout,
-  signup,
   verify_Auth,
   auth_route_test,
   safe_IsUserAuthenticated_mw,
   isUserAuthenticated,
   permitAdminOnly,
+  permitUser,
 };

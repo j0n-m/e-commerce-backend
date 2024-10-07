@@ -109,6 +109,7 @@ const customerSchema = new Schema<ICustomer>({
     required: true,
     minlength: 4,
     unique: true,
+    lowercase: true,
   },
   password: {
     type: String,

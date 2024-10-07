@@ -1583,7 +1583,7 @@ const customer_create = [
     if (!req.body.shipping_address) {
       req.body.shipping_address = null;
     }
-    console.log("hashing:", req.body.password);
+
     const hashedPass = await bcrypt.hash(req.body.password, 10);
 
     const customer = new Customer({
@@ -1611,6 +1611,7 @@ const customer_detail_put = [
     .trim()
     .optional()
     .isLength({ min: 3, max: 16 })
+    .toLowerCase()
     .custom(async (user) => {
       const existingUser = await Customer.findOne({ username: user });
       if (existingUser) {
@@ -1627,6 +1628,7 @@ const customer_detail_put = [
     .optional()
     .isEmail()
     .isLength({ min: 4 })
+    .toLowerCase()
     .custom(async (email) => {
       const existingEmail = await Customer.findOne({ email });
       if (existingEmail) {
