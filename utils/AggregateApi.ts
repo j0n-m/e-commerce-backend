@@ -6,7 +6,7 @@ type MongooseAggregation = mongoose.Aggregate<any[]>;
 export class AggregateApi {
   constructor(
     public aggregation: MongooseAggregation,
-    private queryRecord: searchParameters
+    private queryRecord: searchParameters | { [index: string]: string }
   ) {}
   filter() {
     const defaultProjection = () => this.aggregation.project({ __v: 0 });

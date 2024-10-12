@@ -227,7 +227,7 @@ const products_get = asyncHandler(
 
     return res.json({
       records_count: productListCount,
-      total_pages: Math.ceil(productListCount / pageLimit),
+      total_pages: Math.ceil(productListCount / pageLimit) || 1,
       list_count: allProducts.length,
       products: allProducts,
       product_reviews: reviews,
@@ -381,7 +381,7 @@ const productsByCategory_get = [
 
       return res.json({
         records_count: productListCount,
-        total_pages: Math.ceil(productListCount / pageLimit),
+        total_pages: Math.ceil(productListCount / pageLimit) || 1,
         list_count: allProducts.length,
         products: allProducts,
         review_info: reviewInfo,
@@ -849,7 +849,7 @@ const categories_get = [
       //   .sort({ name: "ascending" });
       return res.json({
         records_count: categoryListCount,
-        total_pages: Math.ceil(categoryListCount / pageLimit),
+        total_pages: Math.ceil(categoryListCount / pageLimit) || 1,
         list_count: allCategories.length,
         categories: allCategories,
       });
@@ -1000,7 +1000,7 @@ const category_detail_delete = [
 
 const reviews_get = asyncHandler(
   async (
-    req: Request<{}, {}, {}, searchParameters>,
+    req: Request<{}, {}, {}, searchParameters & { customer: string }>,
     res: Response,
     next: NextFunction
   ) => {
@@ -1039,6 +1039,26 @@ const reviews_get = asyncHandler(
         },
       });
     }
+
+    if (req.query.customer) {
+      const customerId = req.query.customer;
+      try {
+        if (!mongoose.isValidObjectId(customerId)) {
+          throw new Error();
+        }
+        const customer = await Customer.findById(customerId);
+        if (!customer) {
+          throw new Error();
+        }
+        reviewApi.aggregation.append({
+          $match: {
+            reviewer: customer._id,
+          },
+        });
+      } catch (error) {
+        return res.status(400).json({ message: "Invalid query fields" });
+      }
+    }
     reviewApi.filter().sort("-review_date");
 
     const clone = new AggregateApi(reviewApi.aggregation, req.query);
@@ -1059,7 +1079,7 @@ const reviews_get = asyncHandler(
 
     return res.json({
       records_count: reviewListCount,
-      total_pages: Math.ceil(reviewListCount / pageLimit),
+      total_pages: Math.ceil(reviewListCount / pageLimit) || 1,
       list_count: allReviews.length,
       reviews: allReviews,
     });
@@ -1150,7 +1170,7 @@ const reviews_post = [
         product_id: req.body.product_id,
       });
       await review.save();
-      return res.sendStatus(204);
+      return res.status(200).json({ id: review.id });
     }
   ),
 ];
@@ -1218,7 +1238,7 @@ const reviewsByProduct_get = [
       const allReviews = await reviewsApi.aggregation;
       return res.json({
         records_count: reviewListCount,
-        total_pages: Math.ceil(reviewListCount / pageLimit),
+        total_pages: Math.ceil(reviewListCount / pageLimit) || 1,
         list_count: allReviews.length,
         rating_info,
         reviews: allReviews,
@@ -1332,7 +1352,7 @@ const review_detail_put = [
         }
       }
       let updateReview = null;
-      if (req?.user.is_admin) {
+      if (req.user.is_admin) {
         updateReview = await Review.findByIdAndUpdate(reviewId, {
           _id: review._id,
           rating: req.body.rating || review.rating,
@@ -1429,7 +1449,7 @@ const customer_list = asyncHandler(
 
     return res.json({
       records_count: customerListCount,
-      total_pages: Math.ceil(customerListCount / pageLimit),
+      total_pages: Math.ceil(customerListCount / pageLimit) || 1,
       list_count: allCustomers.length,
       customers: allCustomers,
     });
@@ -1862,14 +1882,24 @@ const orderHistory_list = asyncHandler(async (req: Request, res, next) => {
   const allOrderHistory = await orderHistoryQuery.aggregation;
   return res.json({
     records_count: orderHistoryListCount,
-    total_pages: Math.ceil(orderHistoryListCount / pageLimit),
+    total_pages: Math.ceil(orderHistoryListCount / pageLimit) || 1,
     list_count: allOrderHistory.length,
     order_history: allOrderHistory,
   });
 });
 const orderHistory_by_customer = asyncHandler(
-  async (req: Request<{ customerId: string }>, res: Response, next) => {
+  async (
+    req: Request<
+      { customerId: string },
+      {},
+      {},
+      searchParameters & { product?: string }
+    >,
+    res: Response,
+    next
+  ) => {
     const customerId = req.params.customerId;
+
     if (!mongoose.isValidObjectId(customerId)) {
       return next(); //404
     }
@@ -1880,7 +1910,26 @@ const orderHistory_by_customer = asyncHandler(
       req.query
     );
 
-    orderHistoryQuery.filter().sort("order_date");
+    if (req.query.product) {
+      try {
+        const product = await Product.findById(req.query.product);
+        if (product) {
+          orderHistoryQuery.aggregation.append({
+            $match: { "cart._id": product.id },
+            // $sort: { "order_date": -1 },
+          });
+          orderHistoryQuery.sort("-order_date");
+        } else {
+          return res.status(400).json({ message: "Invalid query fields." });
+        }
+      } catch (error) {
+        return res.status(400).json({ message: "Invalid query fields." });
+      }
+    } else {
+      orderHistoryQuery.sort("order_date");
+    }
+
+    orderHistoryQuery.filter();
     const paginateClone = new AggregateApi(
       orderHistoryQuery.aggregation,
       req.query
@@ -1897,7 +1946,7 @@ const orderHistory_by_customer = asyncHandler(
     const allOrderHistory = await orderHistoryQuery.aggregation;
     return res.json({
       records_count: orderHistoryListCount,
-      total_pages: Math.ceil(orderHistoryListCount / pageLimit),
+      total_pages: Math.ceil(orderHistoryListCount / pageLimit) || 1,
       list_count: allOrderHistory.length,
       order_history: allOrderHistory,
     });
