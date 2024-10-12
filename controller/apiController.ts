@@ -1631,10 +1631,10 @@ const customer_create = [
     }
 
     const hashedPass = await bcrypt.hash(req.body.password, 10);
-    if (!req.user.is_admin) {
-      (req.body.is_admin = false),
-        (req.body.user_code = 1),
-        (req.body.created_at = new Date());
+    if (!req?.user?.is_admin) {
+      req.body.is_admin = false;
+      req.body.user_code = 1;
+      req.body.created_at = new Date();
     }
 
     const customer = new Customer({
