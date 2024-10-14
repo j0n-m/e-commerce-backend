@@ -327,6 +327,33 @@ const permitUserPost = (model: PermitModels) => {
           if (!response) {
             return res.status(400).json({ error: "Payment id doesn't exist." });
           }
+          //set shipping info from response(pi) to stripe customer
+          // console.log("shipping info", response.shipping);
+
+          const customerData = (
+            await stripe.customers.search({
+              query: `metadata['userId']:'${customerId}'`,
+            })
+          ).data;
+          if (customerData.length > 0) {
+            const stripeCustomer = customerData[0];
+            if (response.shipping?.address) {
+              const updatedCustomer = await stripe.customers.update(
+                stripeCustomer.id,
+                {
+                  shipping: {
+                    address: response.shipping
+                      .address as Stripe.ShippingAddressParam,
+                    name: response.shipping?.name as string,
+                  },
+                }
+              );
+              if (updatedCustomer) {
+                console.log("updated customer shipping info");
+              }
+            }
+          }
+
           //verify cart items with payment info metadata
           const cartProductIds =
             response.metadata.cartProductIdsAsStr.split(",");

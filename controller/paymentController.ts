@@ -3,7 +3,7 @@ import "dotenv/config";
 import Stripe from "stripe";
 import mongoose from "mongoose";
 import Product from "../models/Product";
-import { CartItemsType, CartItemZodSchema } from "../models/Customer";
+import Customer, { CartItemsType, CartItemZodSchema } from "../models/Customer";
 import { z } from "zod";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET || "");
@@ -70,7 +70,12 @@ const stripe_update_intent = async (
   req: Request<
     { intentId: string },
     {},
-    { shippingCode: number; cart: CartItemsType[] }
+    {
+      shippingCode: number;
+      cart: CartItemsType[];
+      address?: any;
+      userId: string;
+    }
   >,
   res: Response,
   next: NextFunction
@@ -120,6 +125,10 @@ const stripe_update_intent = async (
     //   cartTotal:number,
     //   cartProductIdsAsStr:string
     // }
+    // const piResponse = await stripe.paymentIntents.retrieve(
+    //   req.params.intentId
+    // );
+    // console.log("shipping value in piresponse", piResponse);
 
     const response = await stripe.paymentIntents.update(req.params.intentId, {
       amount: itemAmountInCents,
@@ -134,6 +143,34 @@ const stripe_update_intent = async (
     if (!response) {
       return res.status(400).json({ error: "Failed to update payment info." });
     }
+    console.log(
+      "before checking req.body.userId",
+      req.body.userId,
+      req.body.address
+    );
+    let foundCustomer = null;
+
+    try {
+      const customerData = (
+        await stripe.customers.search({
+          query: `metadata['userId']:'${req.body.userId}'`,
+        })
+      ).data;
+      if (customerData.length > 0) {
+        // console.log("found customer for shipping update", customerData);
+        const customer = customerData[0];
+        const { id } = customer;
+        foundCustomer = customer;
+        // const updatedCustomer = await stripe.customers.update(id, {
+        //   shipping: req.body.address,
+        // });
+        // if (updatedCustomer) {
+        //   console.log("updated customer shipping", updatedCustomer);
+        // }
+      } else {
+        // console.log("cannot find customer", customerData);
+      }
+    } catch (error) {}
 
     return res.json({
       amount: {
@@ -142,6 +179,7 @@ const stripe_update_intent = async (
         shipping: shippingCostInDollars,
         cartTotal: newCostInDollars,
       },
+      shipping: foundCustomer?.shipping,
     });
   } catch (error) {
     console.log(error);
@@ -168,16 +206,40 @@ const retrieve_pay_info = async (
   }
 };
 const stripe_create_intent = async (
-  req: Request,
+  req: Request<
+    {},
+    {},
+    {
+      cart: CartItemsType[];
+      userId: string;
+      userFirstName: string;
+      userLastName: string;
+    }
+  >,
   res: Response,
   next: NextFunction
 ) => {
   //get cart items from req.body (_id,price,cartQuantity,etc.)
   //cents (x) dollar amount
+  //use zod to parse cart
   const cart = req.body.cart;
   // console.log("cart", cart);
-  if (!cart) {
-    return res.sendStatus(400);
+  if (!cart || cart.length <= 0) {
+    return res.status(400).json({ message: "Cart payload is missing." });
+  }
+  if (!req.body.userFirstName || !req.body.userLastName) {
+    return res.status(400).json({
+      message: "'userFirstName' and 'userLastName' are required fields.",
+    });
+  }
+  if (!req.body.userId || !mongoose.isValidObjectId(req.body.userId)) {
+    return res
+      .status(400)
+      .json({ message: "userId is in an incorrect format." });
+  }
+  const isValidUserId = await Customer.findById(req.body.userId);
+  if (!isValidUserId) {
+    return res.status(400).json({ message: "userId is invalid." });
   }
 
   // const itemAmount = 100 * 1;
@@ -186,22 +248,99 @@ const stripe_create_intent = async (
     // const cartAmount = 1;
     const itemAmount = Math.round(100 * cartAmount) + getShippingFromCode(1);
 
-    console.log("cents", itemAmount);
+    // console.log("cents", itemAmount);
     if (itemAmount <= 0) return res.sendStatus(400);
 
     // const customer = await stripe.customers.create({
     //   name: "Bob Smith",
     //   email: "bob.smith@example.com",
-    //   address: {
-    //     line1: "123 Main St.",
-    //     state: "MO",
-    //     country: "US",
-    //     postal_code: "64110",
-    //     city: "Kansas City",
-    //   },
     //   metadata: {},
     // });
 
+    //search for customer
+    let stripeCustomerId = "";
+    let stripeCustomer = null;
+    const customerData = (
+      await stripe.customers.search({
+        query: `metadata['userId']:'${req.body.userId}'`,
+      })
+    ).data;
+    if (customerData.length > 0) {
+      // console.log("found customer", customerData);
+      const customer = customerData[0];
+      const { id, name } = customer;
+      if (name !== `${req.body.userFirstName} ${req.body.userLastName}`) {
+        const updatedCustomer = await stripe.customers.update(id, {
+          name: `${req.body.userFirstName} ${req.body.userLastName}`,
+        });
+        if (updatedCustomer) {
+          console.log("updated customer name");
+        }
+      }
+      stripeCustomerId = id;
+      stripeCustomer = customer;
+      console.log("found customer id", id);
+    } else {
+      console.log("customer not found, creating one...");
+      const newCustomer = await stripe.customers.create({
+        name: `${req.body.userFirstName} ${req.body.userLastName}`,
+        metadata: {
+          userId: req.body.userId,
+        },
+      });
+      stripeCustomerId = newCustomer.id;
+      stripeCustomer = newCustomer;
+      console.log("new customer created,id->", stripeCustomerId);
+    }
+
+    if (!stripeCustomerId) {
+      return res
+        .status(400)
+        .json({ message: "Couldn't retrive stripe customer id." });
+    }
+
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: itemAmount,
+      currency: "usd",
+      automatic_payment_methods: {
+        enabled: true,
+      },
+      metadata: {},
+      customer: stripeCustomerId,
+      setup_future_usage: "on_session",
+      payment_method_options: {
+        card: {
+          require_cvc_recollection: true,
+        },
+      },
+    });
+    console.log("pi", paymentIntent);
+
+    const customerSession = await stripe.customerSessions.create({
+      customer: stripeCustomerId,
+      components: {
+        payment_element: {
+          enabled: true,
+          features: {
+            payment_method_redisplay: "enabled",
+            payment_method_save: "enabled",
+            payment_method_save_usage: "on_session",
+            payment_method_remove: "enabled",
+          },
+        },
+      },
+    });
+
+    return res.json({
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
+      customer_session_client_secret: customerSession.client_secret,
+      payAmount: paymentIntent.amount / 100,
+    });
+
+    /*
+    ////////////////
+    //OLD CODE BELOW
     const paymentIntent = await stripe.paymentIntents.create({
       amount: itemAmount,
       currency: "usd",
@@ -240,6 +379,7 @@ const stripe_create_intent = async (
       customer: { address: customer.address, name: customer.name },
       payAmount: paymentIntent.amount / 100,
     });
+    */
   } catch (error) {
     return next(error);
   }
