@@ -54,28 +54,62 @@ export class AggregateApi {
   }
   sort(defaultField: string = "name") {
     if (this.queryRecord.sort) {
-      const dbFields = this.queryRecord.sort
-        .replace(/\s/g, "")
-        .split(",")
-        .join(" ");
-      this.aggregation = this.aggregation.sort(dbFields);
+      const dbFields = this.queryRecord.sort.replace(/\s/g, "").split(",");
+      // .join(" ");
+      const sortArr = dbFields.map((str: string) => ({
+        [str[0] === "-" ? str.slice(1) : str]: str[0] === "-" ? -1 : 1,
+      }));
+      let mappedSort = {};
+      sortArr.forEach((obj) => {
+        mappedSort = { ...mappedSort, ...obj };
+      });
+      this.aggregation = this.aggregation.append({
+        $sort: mappedSort,
+      });
     } else {
       this.aggregation = this.aggregation.sort(defaultField);
     }
     return this;
   }
+  sortBy() {
+    if (this.queryRecord.sortBy) {
+      const dbFields = this.queryRecord.sortBy.replace(/\s/g, "").split(",");
+      // .join(" ");
+      const sortArr = dbFields.map((str: string) => ({
+        [str[0] === "-" ? str.slice(1) : str]: str[0] === "-" ? -1 : 1,
+      }));
+      let mappedSort = {};
+      sortArr.forEach((obj) => {
+        mappedSort = { ...mappedSort, ...obj };
+      });
+      this.aggregation = this.aggregation.append({
+        $sort: mappedSort,
+      });
+    }
+  }
   populate(
     fromCollection: string,
     localFieldName: string,
     fromFieldName: string,
-    storedFieldName: string
+    storedFieldName: string,
+    pipeline?: any[]
   ) {
-    this.aggregation.lookup({
-      from: fromCollection,
-      localField: localFieldName,
-      foreignField: fromFieldName,
-      as: storedFieldName,
-    });
+    if (pipeline) {
+      this.aggregation.lookup({
+        from: fromCollection,
+        localField: localFieldName,
+        foreignField: fromFieldName,
+        as: storedFieldName,
+        pipeline,
+      });
+    } else {
+      this.aggregation.lookup({
+        from: fromCollection,
+        localField: localFieldName,
+        foreignField: fromFieldName,
+        as: storedFieldName,
+      });
+    }
     return this;
   }
   paginate() {

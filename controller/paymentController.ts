@@ -82,7 +82,7 @@ const stripe_update_intent = async (
 ) => {
   req.body.shippingCode = +req.body.shippingCode;
   try {
-    if (req.params.intentId === "undefined") {
+    if (req.params.intentId === "undefined" || !req.params.intentId) {
       return res.status(400).json({ error: "Provide the payment intent id." });
     }
     if (!req.body.cart) {
@@ -92,7 +92,7 @@ const stripe_update_intent = async (
     }
     if (
       !req.body.shippingCode ||
-      req.body.shippingCode < 0 ||
+      req.body.shippingCode < 1 ||
       req.body.shippingCode > 3
     ) {
       return res
@@ -227,6 +227,12 @@ const stripe_create_intent = async (
   if (!cart || cart.length <= 0) {
     return res.status(400).json({ message: "Cart payload is missing." });
   }
+  const schemaRes = z.array(CartItemZodSchema).safeParse(req.body.cart);
+  // console.log(req.body.cart);
+  if (!schemaRes.success) {
+    // console.log(schemaRes.error);
+    return res.status(400).json({ error: schemaRes.error });
+  }
   if (!req.body.userFirstName || !req.body.userLastName) {
     return res.status(400).json({
       message: "'userFirstName' and 'userLastName' are required fields.",
@@ -237,25 +243,20 @@ const stripe_create_intent = async (
       .status(400)
       .json({ message: "userId is in an incorrect format." });
   }
-  const isValidUserId = await Customer.findById(req.body.userId);
-  if (!isValidUserId) {
-    return res.status(400).json({ message: "userId is invalid." });
-  }
-
-  // const itemAmount = 100 * 1;
   try {
+    const isValidUserId = await Customer.findById(req.body.userId);
+    if (!isValidUserId) {
+      return res.status(400).json({ message: "userId is invalid." });
+    }
+
+    // const itemAmount = 100 * 1;
+
     const cartAmount = await calculateItemAmount(cart);
     // const cartAmount = 1;
     const itemAmount = Math.round(100 * cartAmount) + getShippingFromCode(1);
 
     // console.log("cents", itemAmount);
     if (itemAmount <= 0) return res.sendStatus(400);
-
-    // const customer = await stripe.customers.create({
-    //   name: "Bob Smith",
-    //   email: "bob.smith@example.com",
-    //   metadata: {},
-    // });
 
     //search for customer
     let stripeCustomerId = "";
@@ -273,15 +274,15 @@ const stripe_create_intent = async (
         const updatedCustomer = await stripe.customers.update(id, {
           name: `${req.body.userFirstName} ${req.body.userLastName}`,
         });
-        if (updatedCustomer) {
-          console.log("updated customer name");
-        }
+        // if (updatedCustomer) {
+        //   // console.log("updated customer name");
+        // }
       }
       stripeCustomerId = id;
       stripeCustomer = customer;
       console.log("found customer id", id);
     } else {
-      console.log("customer not found, creating one...");
+      // console.log("customer not found, creating one...");
       const newCustomer = await stripe.customers.create({
         name: `${req.body.userFirstName} ${req.body.userLastName}`,
         metadata: {
@@ -290,7 +291,7 @@ const stripe_create_intent = async (
       });
       stripeCustomerId = newCustomer.id;
       stripeCustomer = newCustomer;
-      console.log("new customer created,id->", stripeCustomerId);
+      // console.log("new customer created,id->", stripeCustomerId);
     }
 
     if (!stripeCustomerId) {
@@ -314,7 +315,6 @@ const stripe_create_intent = async (
         },
       },
     });
-    console.log("pi", paymentIntent);
 
     const customerSession = await stripe.customerSessions.create({
       customer: stripeCustomerId,

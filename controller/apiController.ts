@@ -57,6 +57,7 @@ export type searchParameters = {
   brand?: string;
   deals?: string;
   reviews?: string;
+  sortBy?: string;
 };
 const products_get = asyncHandler(
   async (
@@ -142,7 +143,46 @@ const products_get = asyncHandler(
     const clone = new AggregateApi(productsApi.aggregation, req.query);
     productListCount = (await clone.aggregation).length;
     //paginates the query to a limit & offset
-    productsApi.sort().paginate();
+    productsApi.sort();
+    // productsApi.paginate();
+
+    productsApi.populate("reviews", "_id", "product_id", "review_info", [
+      { $project: { reviewer: 1, reviewer_name: 1, rating: 1 } },
+      {
+        $group: {
+          _id: null,
+          review_count: { $count: {} },
+          rating_avg: { $avg: "$rating" },
+        },
+      },
+      {
+        $addFields: {
+          rating: {
+            $let: {
+              vars: {
+                result: {
+                  $avg: ["$rating_avg"],
+                },
+              },
+              in: {
+                $round: ["$$result", 2],
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          rating_avg: 0,
+          _id: 0,
+        },
+      },
+    ]);
+
+    if (req.query.sortBy) {
+      productsApi.sortBy();
+    }
+    productsApi.paginate();
 
     //Calculates how many pages & when to send 404 for non existant pages
     const { pageNum, pageLimit, pageSkip } = productsApi.pageInfo();
@@ -154,7 +194,13 @@ const products_get = asyncHandler(
       }
     }
     //execute query
-    const allProducts = await productsApi.aggregation;
+    let allProducts = await productsApi.aggregation;
+    //because review_info field is always going to be [] or an array of one object, we
+    //will map the property to either be null or the object
+    allProducts = allProducts.map((product) => {
+      const review_info = product.review_info[0] || null;
+      return { ...product, review_info };
+    });
 
     const productReviews = new AggregateApi(
       Review.aggregate([{ $match: {} }]),
@@ -308,9 +354,48 @@ const productsByCategory_get = [
       const clone = new AggregateApi(productsApi.aggregation, req.query);
       productListCount = (await clone.aggregation).length;
 
-      //PAGINATE
-      productsApi.sort().paginate();
+      productsApi.sort();
+      // productsApi.paginate();
 
+      //SortBy
+      productsApi.populate("reviews", "_id", "product_id", "review_info", [
+        { $project: { reviewer: 1, reviewer_name: 1, rating: 1 } },
+        {
+          $group: {
+            _id: null,
+            review_count: { $count: {} },
+            rating_avg: { $avg: "$rating" },
+          },
+        },
+        {
+          $addFields: {
+            rating: {
+              $let: {
+                vars: {
+                  result: {
+                    $avg: ["$rating_avg"],
+                  },
+                },
+                in: {
+                  $round: ["$$result", 2],
+                },
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            rating_avg: 0,
+            _id: 0,
+          },
+        },
+      ]);
+
+      if (req.query.sortBy) {
+        productsApi.sortBy();
+      }
+
+      productsApi.paginate();
       const { pageSkip, pageLimit, pageNum } = productsApi.pageInfo();
 
       if (req.query.page) {
@@ -318,7 +403,11 @@ const productsByCategory_get = [
           return next(); //res 404 - not found
         }
       }
-      const allProducts = await productsApi.aggregation;
+      let allProducts = await productsApi.aggregation;
+      allProducts = allProducts.map((product) => {
+        const review_info = product.review_info[0] || null;
+        return { ...product, review_info };
+      });
 
       if (req.query.reviews !== "false") {
         const reviewListQuery = allProducts.map((product) => {
@@ -590,7 +679,7 @@ const product_detail_get = [
       // const reviews = await reviewPipeline;
 
       return res.json({
-        product: product,
+        product: product.length === 1 ? product[0] : product,
         // reviews,
       });
     }
@@ -1075,7 +1164,14 @@ const reviews_get = asyncHandler(
       }
     }
 
-    const allReviews = await reviewApi.aggregation;
+    //maps the aggregation array of product_id back into a JSON object.
+    const allReviews = (await reviewApi.aggregation).map((rev) => {
+      if (rev.product_id.length === 1) {
+        const mapped = rev.product_id[0];
+        const { product_id, ...restOfReview } = rev;
+        return { ...restOfReview, product_id: mapped };
+      }
+    });
 
     return res.json({
       records_count: reviewListCount,

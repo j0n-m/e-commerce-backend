@@ -22,7 +22,16 @@ const app = express();
 // },
 
 const corsOptions: cors.CorsOptions = {
-  origin: "http://localhost:5173",
+  // origin: "http://localhost:5173",
+  origin: function (origin, callback) {
+    //true makes sure the if statement always runs
+    //this allows ALL domains to access
+    if (true || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   preflightContinue: false,
   allowedHeaders: ["Content-Type"],

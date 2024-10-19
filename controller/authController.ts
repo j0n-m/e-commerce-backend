@@ -303,11 +303,7 @@ const permitUserPost = (model: PermitModels) => {
         try {
           const paymentIntentId = req.body.paymentIntentId;
           const reqCart = req.body.cart;
-          if (!paymentIntentId) {
-            return res
-              .status(400)
-              .json({ message: "Missing fields in payload." });
-          }
+
           const customerId = req.body.customerId;
           const customer = await Customer.findById(customerId);
           if (!customer) {
@@ -320,6 +316,12 @@ const permitUserPost = (model: PermitModels) => {
               .status(400)
               .json({ message: "Invalid cart field in payload." });
           }
+          if (!paymentIntentId) {
+            return res
+              .status(400)
+              .json({ message: "Missing payment id field in payload." });
+          }
+
           //Get payment info
           const response = await stripe.paymentIntents.retrieve(
             paymentIntentId
@@ -369,12 +371,14 @@ const permitUserPost = (model: PermitModels) => {
               .json({ message: "Invalid. Cart items do not match." });
           }
 
+          //protect against spam post requests
           const paymentCreated = response.created; //converting from unix epoch timestamp
           const paymentCreatedThreshold = paymentCreated + 10;
           const now = new Date().valueOf();
           if (now < paymentCreatedThreshold) {
             return res.status(403).json({ message: "Too early to re-order" });
           }
+
           const orderPayload = {
             order_date: new Date(),
             customer_id: customerId,
