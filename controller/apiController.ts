@@ -1129,11 +1129,12 @@ const reviews_get = asyncHandler(
       });
     }
 
-    if (req.query.customer) {
+    if (req.query.customer || req.query.customer === "") {
+      //if customer query is invalid immediately return 400
       const customerId = req.query.customer;
       try {
         if (!mongoose.isValidObjectId(customerId)) {
-          throw new Error();
+          throw new Error("Invalid customerId");
         }
         const customer = await Customer.findById(customerId);
         if (!customer) {
