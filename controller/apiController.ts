@@ -579,6 +579,12 @@ const products_post = [
         }
       }
       return true;
+    })
+    .customSanitizer((arr: string[]) => {
+      const mongooseIds = arr.map(
+        (id) => new mongoose.Types.ObjectId(id.toString())
+      );
+      return mongooseIds;
     }),
   body("total_bought", "Total bought must be a positive integer number.").isInt(
     { min: 0 }
@@ -754,8 +760,8 @@ const product_detail_put = [
     .isInt({ gt: 0, lt: 251 }),
   body("category", "Categories must include correct category Ids.")
     .optional()
+    .isArray()
     .custom(async (categories: string[] | mongoose.Types.ObjectId[]) => {
-      // console.log("category", categories);
       if (!Array.isArray(categories)) {
         throw new Error("Invalid format for category field.");
       }
@@ -773,6 +779,12 @@ const product_detail_put = [
         }
       }
       return true;
+    })
+    .customSanitizer((arr: string[]) => {
+      const mongooseIds = arr.map(
+        (id) => new mongoose.Types.ObjectId(id.toString())
+      );
+      return mongooseIds;
     }),
   body(
     "total_bought",
@@ -836,6 +848,7 @@ const product_detail_put = [
         tags: req.body.tags || product.tags,
         image_src: req.body.image_src || product.image_src,
       });
+
       if (!updatedProduct) {
         return res.status(400).json({
           error: `Error! Product: ${productId} could not be updated.`,
@@ -1910,9 +1923,9 @@ const customer_detail_put = [
         if (req.body.email) {
           req.body.email = customer.email;
         }
-        if (req.body.username) {
-          req.body.username = customer.username;
-        }
+        // if (req.body.username) {
+        //   req.body.username = customer.username;
+        // }
       }
 
       const updateCustomer = await Customer.findByIdAndUpdate(customerId, {
@@ -1945,23 +1958,13 @@ const orderHistory_list = asyncHandler(async (req: Request, res, next) => {
     req.query
   );
 
-  // if (req.query.customer) {
-  //   const customerId = req.query.customer;
-  //   if (mongoose.isValidObjectId(customerId)) {
-  //     orderHistoryQuery.aggregation.append({
-  //       $match: { customer_id: new mongoose.Types.ObjectId(customerId) },
-  //     });
-  //   } else {
-  //     //return an empty array
-  //     orderHistoryQuery.aggregation.append({
-  //       $match: {
-  //         unknown_field: "unknown",
-  //       },
-  //     });
-  //   }
-  // }
-
   orderHistoryQuery.filter().sort("-order_date");
+  orderHistoryQuery.populate("products", "cart._id", "_id", "product_info");
+  // orderHistoryQuery.aggregation.append({
+  //   $addFields: {
+  //     test: "$cart._id",
+  //   },
+  // });
 
   const paginateClone = new AggregateApi(
     orderHistoryQuery.aggregation,
@@ -2023,10 +2026,11 @@ const orderHistory_by_customer = asyncHandler(
         return res.status(400).json({ message: "Invalid query fields." });
       }
     } else {
-      orderHistoryQuery.sort("order_date");
+      orderHistoryQuery.sort("-order_date");
     }
 
     orderHistoryQuery.filter();
+    orderHistoryQuery.populate("products", "cart._id", "_id", "product_info");
     const paginateClone = new AggregateApi(
       orderHistoryQuery.aggregation,
       req.query
@@ -2138,11 +2142,12 @@ const orderHistory_create = [
       }
     })
     .customSanitizer((arr: CartItemsType[]) => {
-      // for (const cartItem of arr) {
-      //   const response = CartItemZodSchema.safeParse(cartItem);
-      // }
-      const response = z.array(CartItemZodSchema).safeParse(arr);
-      return response.data;
+      return arr.map((cart) => {
+        const mongooseId = new mongoose.Types.ObjectId(cart._id);
+        return { ...cart, _id: mongooseId };
+      });
+      // const response = z.array(CartItemZodSchema).safeParse(arr);
+      // return response.data;
     }),
 
   asyncHandler(
@@ -2187,6 +2192,7 @@ const orderHistory_detail_put = [
     }),
   body("cart_total", "Cart total is required.")
     .isNumeric()
+    .optional()
     .customSanitizer((v) => Number(v)),
   body("shipping", "Shipping field must be an object.").optional().isObject(),
   body("shipping.cost", "Shipping.cost must be defined as a number")
@@ -2197,51 +2203,59 @@ const orderHistory_detail_put = [
     .optional()
     .isInt({ min: 1, max: 3 })
     .customSanitizer((v) => Number.parseInt(v)),
-  body("cart", "The cart must be an object of one cart item.")
+  body("cart", "The cart must be an array list of at least one cart item.")
     .optional()
-    .isObject()
-    .custom(async (v: CartItemsType) => {
+    .isArray({ min: 1 })
+    .custom(async (arr: CartItemsType[]) => {
       // if (v.length === 0) return true;
-      const response = CartItemZodSchema.safeParse(v);
-      if (!response.success) {
-        // throw response.error.errors;
-        const errorList = response.error.errors;
-        const errors: string[][] = [];
-        errorList.forEach((e) => {
-          errors.push([e.path.toString(), e.message]);
-        });
-        throw errors;
-      } else {
-        //validate cartitem id, and categories
-        const productId = v._id;
-        const categoryIds = v.category.map((obj) => obj._id);
-        if (!isValidObjectId(productId)) {
-          throw new Error("Cart item's _id field is not a valid product.");
-        }
-        for (const catId of categoryIds) {
-          if (!isValidObjectId(catId)) {
-            throw new Error(
-              `Cart item's category _id field (${catId}) is not a valid category id.`
-            );
-          }
-          const category = await Category.findById(catId);
-          if (!category) {
-            throw new Error(
-              `Cart item's category _id field (${catId}) is not a valid category id.`
-            );
-          }
-        }
+      for (const cartItem of arr) {
+        const response = CartItemZodSchema.safeParse(cartItem);
 
-        //db queries
-        const product = await Product.findById(productId);
-        if (!product) {
-          throw new Error("Cart item's _id field is not a valid product.");
+        if (!response.success) {
+          // throw response.error.errors;
+          const errorList = response.error.errors;
+          const errors: string[][] = [];
+          errorList.forEach((e) => {
+            errors.push([e.path.toString(), e.message]);
+          });
+          throw errors;
+        } else {
+          //validate cartitem id, and categories
+          const productId = cartItem._id;
+          const categoryIds = cartItem.category.map((obj) => obj._id);
+          if (!isValidObjectId(productId)) {
+            throw new Error("Cart item's _id field is not a valid product.");
+          }
+          for (const catId of categoryIds) {
+            if (!isValidObjectId(catId)) {
+              throw new Error(
+                `Cart item's category _id field (${catId}) is not a valid category id.`
+              );
+            }
+            const category = await Category.findById(catId);
+            if (!category) {
+              throw new Error(
+                `Cart item's category _id field (${catId}) is not a valid category id.`
+              );
+            }
+          }
+
+          //db queries
+          const product = await Product.findById(productId);
+          if (!product) {
+            throw new Error("Cart item's _id field is not a valid product.");
+          }
+          return true;
         }
-        return true;
       }
     })
-    .customSanitizer((val) => {
-      return CartItemZodSchema.safeParse(val).data;
+    .customSanitizer((arr: CartItemsType[]) => {
+      return arr.map((cart) => {
+        const mongooseId = new mongoose.Types.ObjectId(cart._id);
+        return { ...cart, _id: mongooseId };
+      });
+      // const response = z.array(CartItemZodSchema).safeParse(arr);
+      // return response.data;
     }),
 
   asyncHandler(
@@ -2267,17 +2281,17 @@ const orderHistory_detail_put = [
       if (!orderHistory) {
         return next();
       }
-      const updateOrder = {
-        _id: orderHistory._id,
-        order_date: req.body.order_date || orderHistory.order_date,
-        customer_id: req.body.customer_id || orderHistory.customer_id,
-        cart: req.body.cart || orderHistory.cart,
-        shipping: {
-          code: req.body?.shipping?.code || orderHistory.shipping.code,
-          cost: req.body?.shipping?.cost || orderHistory.shipping.cost,
-        },
-        cart_total: req.body.cart_total || orderHistory.cart_total,
-      };
+      // const updateOrder = {
+      //   _id: orderHistory._id,
+      //   order_date: req.body.order_date || orderHistory.order_date,
+      //   customer_id: req.body.customer_id || orderHistory.customer_id,
+      //   cart: req.body.cart || orderHistory.cart,
+      //   shipping: {
+      //     code: req.body?.shipping?.code || orderHistory.shipping.code,
+      //     cost: req.body?.shipping?.cost || orderHistory.shipping.cost,
+      //   },
+      //   cart_total: req.body.cart_total || orderHistory.cart_total,
+      // };
       const updatedOrderHistory = await OrderHistory.findByIdAndUpdate(
         orderId,
         {

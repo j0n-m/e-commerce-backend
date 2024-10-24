@@ -116,6 +116,7 @@ router.put(
   "/customer/:customerId",
   auth.verify_Auth,
   auth.permitUser("Customers"),
+  auth.replaceSession,
   controller.customer_detail_put
 ); //only by the user with strict PUT control and admins - protect sensitive info
 router.delete(

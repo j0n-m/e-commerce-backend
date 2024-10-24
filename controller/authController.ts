@@ -87,6 +87,66 @@ const isUserAuthenticated = async (
     return res.json({ message: "You are not authenticated.", isAuth: false });
   }
 };
+const replaceSession = async (
+  req: Request<{}, {}, { email: string; password: string }>,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    res.clearCookie("token");
+    if (req.user) {
+      const user = await Customer.findById(req?.user?.id);
+      if (!user) {
+        return res
+          .status(401)
+          .json({ email: "We didn't find this email. Try again." });
+      }
+      const userPayload = {
+        id: user.id,
+        username: user.username,
+        user_code: user.user_code,
+        is_admin: user.is_admin,
+        email: user.email,
+        created_at: user.created_at,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        shipping_address: user.shipping_address,
+      };
+      //create token:
+      const token = jwt.sign(userPayload, process.env.JWT_SECRET || "", {
+        expiresIn: "60m",
+      });
+      const ENVIRONMENT = process.env?.NODE_ENV;
+      // console.log(ENVIRONMENT);
+
+      // run code conditionally
+      if (ENVIRONMENT === "development") {
+        console.log("Dev cookies enabled");
+        res.cookie("token", token, {
+          httpOnly: true,
+          // maxAge = how long the cookie is valid for in milliseconds
+          // maxAge: 1000 * 60 * 10, // 10min,
+          maxAge: 3600000, // 1hr,
+        });
+      } else {
+        res.cookie("token", token, {
+          httpOnly: true,
+          // path = where the cookie is valid
+          path: "/",
+          // secure = only send cookie over https
+          secure: true,
+          // sameSite = only send cookie if the request is coming from the same origin
+          sameSite: "none",
+          maxAge: 3600000, // 1 hour
+        });
+      }
+      return next();
+    }
+    return res.sendStatus(401);
+  } catch (error) {
+    return next(error);
+  }
+};
 const login = async (
   req: Request<{}, {}, { email: string; password: string }>,
   res: Response,
@@ -94,10 +154,10 @@ const login = async (
 ) => {
   try {
     // const cookieToken = req.cookies.token;
-    if (req.user) {
-      console.log("user is already logged in");
-      return res.sendStatus(200);
-    }
+    // if (req.user) {
+    //   console.log("user is already logged in");
+    //   return res.sendStatus(200);
+    // }
     //info given from request body
     const password = req.body.password;
     const email = req.body.email;
@@ -131,7 +191,7 @@ const login = async (
 
     //create token:
     const token = jwt.sign(userPayload, process.env.JWT_SECRET || "", {
-      expiresIn: "15m",
+      expiresIn: "60m",
     });
     const ENVIRONMENT = process.env?.NODE_ENV;
     // console.log(ENVIRONMENT);
@@ -143,7 +203,7 @@ const login = async (
         httpOnly: true,
         // maxAge = how long the cookie is valid for in milliseconds
         // maxAge: 1000 * 60 * 10, // 10min,
-        maxAge: 1000 * 60 * 15, // 15m,
+        maxAge: 3600000, // 1hr,
       });
     } else {
       res.cookie("token", token, {
@@ -446,4 +506,5 @@ export {
   permitAdminOnly,
   permitUser,
   permitUserPost,
+  replaceSession,
 };

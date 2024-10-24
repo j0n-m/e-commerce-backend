@@ -43,7 +43,7 @@ const orderHistorySchema = new Schema<IOrderHistory>({
   },
   cart: [
     {
-      _id: { type: String, required: true },
+      _id: { type: Schema.ObjectId, ref: "Product", required: true },
       name: {
         type: String,
         minlength: 2,

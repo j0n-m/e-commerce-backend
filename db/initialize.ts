@@ -3,6 +3,7 @@ import Category from "../models/Category";
 import Product from "../models/Product";
 import { IProduct } from "../models/Product";
 import Review from "../models/Review";
+import OrderHistory from "../models/OrderHistory";
 
 async function safeHandler(cb: Function) {
   try {
@@ -132,13 +133,21 @@ async function initializeReviews() {
   review.save();
   console.log("saved review");
 }
+async function initOrderHistory() {
+  const allOrderHistory = await OrderHistory.find({});
+  allOrderHistory.forEach(async (order) => {
+    const orderJson = order.toJSON();
+    await OrderHistory.findByIdAndUpdate(order.id, orderJson);
+  });
+}
 async function initController() {
   // console.log("initController() started");
   // await safeHandler(initializeCategories);
   // console.log("about to start initializeProducts");
   // await safeHandler(initializeProducts);
   console.log("about to start initializeReviews");
-  await safeHandler(initializeReviews);
+  // await safeHandler(initializeReviews);
+  // await safeHandler(initOrderHistory);
 }
 
 export { initController };
