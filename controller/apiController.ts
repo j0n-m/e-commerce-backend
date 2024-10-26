@@ -58,6 +58,8 @@ export type searchParameters = {
   deals?: string;
   reviews?: string;
   sortBy?: string;
+  discount_low?: string;
+  discount_high?: string;
 };
 const products_get = asyncHandler(
   async (
@@ -137,6 +139,18 @@ const products_get = asyncHandler(
             $gte: price_low,
             $lte: price_high,
           },
+        },
+      });
+    }
+    if (req.query.discount_low && req.query.discount_high) {
+      const low_percent = Number(req.query.discount_low) || 0;
+      const high_percent = Number(req.query.discount_high) || 0;
+      productsApi.aggregation.append({
+        $match: {
+          $and: [
+            { discount: { $gte: low_percent } },
+            { discount: { $lte: high_percent } },
+          ],
         },
       });
     }
@@ -587,7 +601,7 @@ const products_post = [
       return mongooseIds;
     }),
   body("total_bought", "Total bought must be a positive integer number.").isInt(
-    { min: 0 }
+    { min: 0, max: 1000000 }
   ),
   body("tags", "Tags must be in a correct list format.")
     .trim()
@@ -622,6 +636,7 @@ const products_post = [
         tags: req.body.tags,
         image_src: req.body.image_src,
       });
+      product.tags = [...product.tags, product.id];
       product.save();
       // console.log("post-product -need to connect to db to write");
       return res.sendStatus(204);
@@ -791,7 +806,7 @@ const product_detail_put = [
     "Total bought must be an integer number greater than or equal to 0."
   )
     .optional()
-    .isInt({ min: 0 }),
+    .isInt({ min: 0, max: 1000000 }),
   body("tags", "Tags must be in a correct list format.")
     .trim()
     .optional()

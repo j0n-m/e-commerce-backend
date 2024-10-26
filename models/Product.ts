@@ -82,6 +82,8 @@ const productSchema = new Schema<IProduct>({
     type: Number,
     required: true,
     default: 0,
+    min: 0,
+    max: 1000000,
   },
   tags: [
     {
