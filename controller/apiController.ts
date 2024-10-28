@@ -2030,7 +2030,7 @@ const orderHistory_by_customer = asyncHandler(
         const product = await Product.findById(req.query.product);
         if (product) {
           orderHistoryQuery.aggregation.append({
-            $match: { "cart._id": product.id },
+            $match: { "cart._id": product._id },
             // $sort: { "order_date": -1 },
           });
           orderHistoryQuery.sort("-order_date");

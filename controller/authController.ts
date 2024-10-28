@@ -191,7 +191,7 @@ const login = async (
 
     //create token:
     const token = jwt.sign(userPayload, process.env.JWT_SECRET || "", {
-      expiresIn: "60m",
+      expiresIn: "6h",
     });
     const ENVIRONMENT = process.env?.NODE_ENV;
     // console.log(ENVIRONMENT);
@@ -203,7 +203,7 @@ const login = async (
         httpOnly: true,
         // maxAge = how long the cookie is valid for in milliseconds
         // maxAge: 1000 * 60 * 10, // 10min,
-        maxAge: 3600000, // 1hr,
+        maxAge: 3600000 * 6, // 6hrs,
       });
     } else {
       res.cookie("token", token, {
@@ -214,7 +214,7 @@ const login = async (
         secure: true,
         // sameSite = only send cookie if the request is coming from the same origin
         sameSite: "none",
-        maxAge: 3600000, // 1 hour
+        maxAge: 3600000 * 6, // 6 hour
       });
     }
     console.log("user is now logged in");
