@@ -5,8 +5,12 @@ import morgan from "morgan";
 import "dotenv/config";
 import cors = require("cors");
 import cookieParser = require("cookie-parser");
+import path from "path";
 
 const app = express();
+// const _dirname = path.dirname("");
+// const buildPath = path.join(_dirname, "/frontend/dist");
+// app.use(express.static(buildPath));
 
 //corsOptions.origin to allow all domains to access the apis
 
@@ -49,6 +53,8 @@ app.use(express.urlencoded({ extended: false }));
 
 app.use("/auth", authRouter);
 app.use("/api", apiRouter);
+
+// Handles any requests that don't match the ones above
 
 app.use((req, res) => {
   return res.status(404).json({ message: "Page not found." });

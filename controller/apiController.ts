@@ -636,10 +636,18 @@ const products_post = [
         tags: req.body.tags,
         image_src: req.body.image_src,
       });
-      product.tags = [...product.tags, product.id];
+      const tagsFromName = product.name.split(" ");
+      const tagsFromCategory = req.body.category.map((cat) => cat.toString());
+      product.tags = [
+        ...product.tags,
+        ...tagsFromName,
+        ...tagsFromCategory,
+        product.brand,
+        product.id,
+      ];
       product.save();
-      // console.log("post-product -need to connect to db to write");
-      return res.sendStatus(204);
+
+      return res.sendStatus(201);
     }
   ),
 ];
