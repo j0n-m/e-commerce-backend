@@ -1330,6 +1330,15 @@ const reviewsByProduct_get = [
       if (req.query.populate === "true") {
         reviewsApi.populate("products", "product_id", "_id", "product_id");
       }
+      reviewsApi.populate("customers", "reviewer", "_id", "reviewer", [
+        {
+          $project: {
+            first_name: 1,
+            last_name: 1,
+            username: 1,
+          },
+        },
+      ]);
 
       reviewsApi.filter();
 
